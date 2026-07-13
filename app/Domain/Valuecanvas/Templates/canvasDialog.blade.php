@@ -1,4 +1,5 @@
 @php
+    $currentCanvas = $currentCanvas ?? '';
     $canvasName = 'value';
 
     $hiddenStatusLabels = $statusLabels ?? [];

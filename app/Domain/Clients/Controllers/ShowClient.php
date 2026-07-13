@@ -115,6 +115,19 @@ class ShowClient extends Controller
                 }
             }
 
+            // Delete comment
+            if (isset($_GET['delComment']) === true) {
+                $commentId = (int) ($_GET['delComment']);
+
+                if ($this->commentService->deleteComment($commentId)) {
+                    $this->tpl->setNotification($this->language->__('notifications.comment_deleted'), 'success');
+
+                    return Frontcontroller::redirect(BASE_URL . '/clients/showClient/' . $id . '#comment');
+                } else {
+                    $this->tpl->setNotification($this->language->__('notifications.comment_deleted_error'), 'error');
+                }
+            }
+
             // Add comment
             if (isset($_POST['comment']) === true) {
                 if ($this->commentService->addComment($_POST, 'client', $id, $row)) {
