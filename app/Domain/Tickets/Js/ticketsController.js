@@ -241,6 +241,11 @@ leantime.ticketsController = (function () {
         jQuery(document).ready(
             function () {
 
+                // The Gantt constructor fires on_view_change once while building. Persisting that
+                // event would overwrite the user's saved scale with the default, so ignore any
+                // view change until construction is finished; only user-driven changes save.
+                var ganttInitializing = true;
+
                 if (readonly === false) {
                     var gantt_chart = new Gantt(
                         "#gantt",
@@ -255,7 +260,7 @@ leantime.ticketsController = (function () {
                             bar_corner_radius: 10,
                             arrow_curve: 10,
                             padding:20,
-                            view_mode: 'Month',
+                            view_mode: viewMode,
                             date_format: leantime.i18n.__("language.momentJSDate"),
                             language: leantime.i18n.__("language.code").slice(0, 2), //Get first 2 characters of language code
                             additional_rows: 5,
@@ -318,6 +323,7 @@ leantime.ticketsController = (function () {
                             },
                             on_view_change: function (mode) {
 
+                                if (ganttInitializing) { return; }
                                 leantime.usersRepository.updateUserViewSettings("roadmap", mode);
 
                             },
@@ -335,6 +341,8 @@ leantime.ticketsController = (function () {
                             resizing: false,
                             progress: false,
                             is_draggable: false,
+                            view_modes: ['Day', 'Week', 'Month'],
+                            view_mode: viewMode,
                             custom_popup_html: function (task) {
 
 
@@ -377,6 +385,7 @@ leantime.ticketsController = (function () {
                             },
                             on_view_change: function (mode) {
 
+                                if (ganttInitializing) { return; }
                                 leantime.usersRepository.updateUserViewSettings("roadmap", mode);
 
                             }
@@ -399,7 +408,9 @@ leantime.ticketsController = (function () {
                     }
                 );
 
-                gantt_chart.change_view_mode(viewMode);
+                // Constructor already built the chart at the saved viewMode; construction is done,
+                // so from here on real user-driven view changes are allowed to persist.
+                ganttInitializing = false;
 
             }
         );
@@ -825,7 +836,7 @@ leantime.ticketsController = (function () {
                 leantime.rpc('Tickets.Tickets.patchTicket', { id: ticketId, values: { editorId: userId } })
                     .then(
                     function () {
-                        jQuery("#userDropdownMenuLink" + ticketId + " span.text span#userImage" + ticketId + " img").attr("src", leantime.appUrl + "/api/users?profileImage=" + userId);
+                        jQuery("#userDropdownMenuLink" + ticketId + " span.text span#userImage" + ticketId + " img").attr("src", leantime.appUrl + "/users/profileImage/" + encodeURIComponent(userId));
                         jQuery("#userDropdownMenuLink" + ticketId + " span.text span#user" + ticketId).text(dataLabel);
                         jQuery.growl({message: leantime.i18n.__("short_notifications.user_updated"), style: "success"});
 
@@ -1106,33 +1117,39 @@ leantime.ticketsController = (function () {
             var types = jQuery("#typeSelect").val();
             var priority = jQuery("#prioritySelect").val();
             var status = jQuery("#statusSelect").val();
+            var projects = jQuery("#projectsSelect").val();
             var sort = jQuery("#sortBySelect").val();
             var groupBy = jQuery("input[name='groupBy']:checked").val();
             var showTasks = jQuery("input[name='showTasks']:checked").val();
 
+            // Encode each value: these come from the DOM (filter inputs) and are concatenated
+            // into a URL, so encodeURIComponent keeps special characters (&, #, spaces, commas)
+            // from breaking the query and closes the DOM-text-to-navigation sink.
             var query = "?search=true";
             if (project != "" && project != undefined) {
-                query = query + "&projectId=" + project}
+                query = query + "&projectId=" + encodeURIComponent(project)}
             if (users != "" && users != undefined) {
-                query = query + "&users=" + users}
+                query = query + "&users=" + encodeURIComponent(users)}
             if (milestones != ""  && milestones != undefined) {
-                query = query + "&milestone=" + milestones}
+                query = query + "&milestone=" + encodeURIComponent(milestones)}
             if (term != ""  && term != undefined) {
-                query = query + "&term=" + term;}
+                query = query + "&term=" + encodeURIComponent(term);}
             if (sprints != ""  && sprints != undefined) {
-                query = query + "&sprint=" + sprints;}
+                query = query + "&sprint=" + encodeURIComponent(sprints);}
             if (types != "" && types != undefined) {
-                query = query + "&type=" + types;}
+                query = query + "&type=" + encodeURIComponent(types);}
             if (priority != "" && priority != undefined) {
-                query = query + "&priority=" + priority;}
+                query = query + "&priority=" + encodeURIComponent(priority);}
             if (status != "" && status != undefined) {
-                query = query + "&status=" + status;}
+                query = query + "&status=" + encodeURIComponent(status);}
+            if (projects != "" && projects != undefined) {
+                query = query + "&projects=" + encodeURIComponent(projects);}
             if (sort != "" && sort != undefined) {
-                query = query + "&sort=" + sort;}
+                query = query + "&sort=" + encodeURIComponent(sort);}
             if (groupBy != "" && groupBy != undefined) {
-                query = query + "&groupBy=" + groupBy;}
+                query = query + "&groupBy=" + encodeURIComponent(groupBy);}
             if (showTasks != "" && showTasks != undefined) {
-                query = query + "&showTasks=" + showTasks;}
+                query = query + "&showTasks=" + encodeURIComponent(showTasks);}
 
             var rediredirectUrl = url + query;
 
@@ -1151,30 +1168,35 @@ leantime.ticketsController = (function () {
             var types = jQuery("#typeSelect").val();
             var priority = jQuery("#prioritySelect").val();
             var status = jQuery("#statusSelect").val();
+            var projects = jQuery("#projectsSelect").val();
             var sort = jQuery("#sortBySelect").val();
             var groupBy = jQuery("input[name='groupBy']:checked").val();
 
+            // Encode each value (DOM-sourced filter inputs concatenated into a URL) — see the
+            // matching note in initTicketSearchSubmit.
             var query = "?search=true";
         if (project != "" && project != undefined) {
-            query = query + "&projectId=" + project}
+            query = query + "&projectId=" + encodeURIComponent(project)}
         if (users != "" && users != undefined) {
-            query = query + "&users=" + users}
+            query = query + "&users=" + encodeURIComponent(users)}
         if (milestones != ""  && milestones != undefined) {
-            query = query + "&milestone=" + milestones}
+            query = query + "&milestone=" + encodeURIComponent(milestones)}
         if (term != ""  && term != undefined) {
-            query = query + "&term=" + term;}
+            query = query + "&term=" + encodeURIComponent(term);}
         if (sprints != ""  && sprints != undefined) {
-            query = query + "&sprint=" + sprints;}
+            query = query + "&sprint=" + encodeURIComponent(sprints);}
         if (types != "" && types != undefined) {
-            query = query + "&type=" + types;}
+            query = query + "&type=" + encodeURIComponent(types);}
         if (priority != "" && priority != undefined) {
-            query = query + "&priority=" + priority;}
+            query = query + "&priority=" + encodeURIComponent(priority);}
         if (status != "" && status != undefined) {
-            query = query + "&status=" + status;}
+            query = query + "&status=" + encodeURIComponent(status);}
+        if (projects != "" && projects != undefined) {
+            query = query + "&projects=" + encodeURIComponent(projects);}
         if (sort != "" && sort != undefined) {
-            query = query + "&sort=" + sort;}
+            query = query + "&sort=" + encodeURIComponent(sort);}
         if (groupBy != "" && groupBy != undefined) {
-            query = query + "&groupBy=" + groupBy;}
+            query = query + "&groupBy=" + encodeURIComponent(groupBy);}
 
             var rediredirectUrl = url + query;
 
@@ -1399,7 +1421,7 @@ leantime.ticketsController = (function () {
                                 var $userDropdown = jQuery('#userDropdownMenuLink' + ticketId);
                                 if ($userDropdown.length) {
                                     // Update user image
-                                    $userDropdown.find('span.text span img').attr('src', leantime.appUrl + '/api/users?profileImage=' + newGroupValue);
+                                    $userDropdown.find('span.text span img').attr('src', leantime.appUrl + '/users/profileImage/' + newGroupValue);
 
                                     // Get the new user's name from swimlane header
                                     var $newSwimlaneHeader = jQuery('#swimlane-row-' + newGroupValue + ' .swimlane-header-label');

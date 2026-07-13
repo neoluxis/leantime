@@ -11,6 +11,7 @@ use Leantime\Core\Db\Db as DbCore;
 use Leantime\Core\Events\DispatchesEvents as EventhelperCore;
 use Leantime\Core\Language as LanguageCore;
 use Leantime\Core\Support\EntityRelationshipEnum;
+use Leantime\Domain\Tickets\Events\TicketStatusUpdated;
 use Leantime\Domain\Users\Services\Users;
 
 class Tickets
@@ -243,6 +244,52 @@ class Tickets
     }
 
     /**
+     * Resolve the set of project ids a search applies to. A multi-project `projects`
+     * criterion (program cross-project views) wins over the single `currentProject`.
+     *
+     * @return int[]
+     */
+    private function resolveScopedProjectIds(array $searchCriteria): array
+    {
+        if (isset($searchCriteria['projects']) && $searchCriteria['projects'] != '') {
+            return array_values(array_filter(
+                array_map('intval', explode(',', (string) $searchCriteria['projects'])),
+                static fn ($id) => $id > 0
+            ));
+        }
+
+        if (isset($searchCriteria['currentProject']) && $searchCriteria['currentProject'] != '') {
+            return [(int) $searchCriteria['currentProject']];
+        }
+
+        return [];
+    }
+
+    /**
+     * Union the status keys matching a semantic type ("done" / "not_done") across every
+     * project in scope. Keys are deduped so a cross-project board can filter correctly
+     * even when projects define different custom status label sets.
+     *
+     * @param  int[]  $projectIds
+     * @return int[]
+     */
+    private function collectStatusKeysByType(array $projectIds, string $filter): array
+    {
+        $statusKeys = [];
+
+        foreach ($projectIds as $projectId) {
+            foreach ($this->getStateLabels($projectId) as $key => $status) {
+                $isDone = ($status['statusType'] ?? '') === 'DONE';
+                if (($filter === 'done' && $isDone) || ($filter === 'not_done' && ! $isDone)) {
+                    $statusKeys[$key] = true;
+                }
+            }
+        }
+
+        return array_keys($statusKeys);
+    }
+
+    /**
      * getAll - get all Tickets, depending on userrole
      *
      * @throws BindingResolutionException
@@ -325,7 +372,7 @@ class Tickets
      *
      * @param  null  $limit
      */
-    public function getAllBySearchCriteria(array $searchCriteria, string $sort = 'standard', $limit = null, $includeCounts = true, $offset = null): bool|array
+    public function getAllBySearchCriteria(array $searchCriteria, string $sort = 'standard', ?int $limit = null, $includeCounts = true, ?int $offset = null): bool|array
     {
         $requestorId = session()->exists('userdata') ? session('userdata.id') : -1;
         $userId = $searchCriteria['currentUser'] ?? session('userdata.id') ?? '-1';
@@ -455,11 +502,6 @@ class Tickets
                             ->where('zp_projects.clientId', $clientId);
                     })
                     ->orWhere('requestor.role', '>=', 40);
-            })
-            // Exclude tickets from closed projects
-            ->where(function ($q) {
-                $q->where('zp_projects.state', '<>', -1)
-                    ->orWhereNull('zp_projects.state');
             });
 
         // Apply search criteria filters
@@ -475,8 +517,30 @@ class Tickets
             $query->where('zp_tickets.type', '<>', $searchCriteria['excludeType']);
         }
 
-        if (isset($searchCriteria['currentProject']) && $searchCriteria['currentProject'] != '') {
+        // A multi-project filter (program cross-project views) takes precedence over the
+        // single currentProject filter. In program context currentProject is the program
+        // id, which owns no tickets, so we must not AND the two together.
+        $scopedProjectIds = $this->resolveScopedProjectIds($searchCriteria);
+        if (isset($searchCriteria['projects']) && $searchCriteria['projects'] != '') {
+            if ($scopedProjectIds !== []) {
+                $query->whereIn('zp_tickets.projectId', $scopedProjectIds);
+            } else {
+                // A projects filter was requested but resolved to no valid ids — match nothing
+                // rather than silently dropping the project scope (which would leak every
+                // accessible ticket across all projects).
+                $query->whereRaw('1 = 0');
+            }
+        } elseif (isset($searchCriteria['currentProject']) && $searchCriteria['currentProject'] != '') {
             $query->where('zp_tickets.projectId', $searchCriteria['currentProject']);
+        } else {
+            // No explicit project scope (My Work / cross-project aggregation): hide tickets from
+            // closed projects to reduce clutter. When the user has explicitly scoped to a project
+            // or program above, that scope wins and its tickets show regardless of closed state, so
+            // a closed project stays fully browsable when opened directly (#3626).
+            $query->where(function ($q) {
+                $q->where('zp_projects.state', '<>', -1)
+                    ->orWhereNull('zp_projects.state');
+            });
         }
 
         if (isset($searchCriteria['users']) && $searchCriteria['users'] != '') {
@@ -523,30 +587,14 @@ class Tickets
             $statusArray = explode(',', $searchCriteria['status']);
 
             if (array_search('not_done', $statusArray) !== false) {
-                if ($searchCriteria['currentProject'] != '') {
-                    $statusLabels = $this->getStateLabels($searchCriteria['currentProject']);
-                    $statusList = [];
-                    foreach ($statusLabels as $key => $status) {
-                        if ($status['statusType'] !== 'DONE') {
-                            $statusList[] = $key;
-                        }
-                    }
-                    if (! empty($statusList)) {
-                        $query->whereIn('zp_tickets.status', $statusList);
-                    }
+                $statusList = $this->collectStatusKeysByType($scopedProjectIds, 'not_done');
+                if (! empty($statusList)) {
+                    $query->whereIn('zp_tickets.status', $statusList);
                 }
             } elseif (array_search('done', $statusArray) !== false) {
-                if ($searchCriteria['currentProject'] != '') {
-                    $statusLabels = $this->getStateLabels($searchCriteria['currentProject']);
-                    $statusList = [];
-                    foreach ($statusLabels as $key => $status) {
-                        if ($status['statusType'] === 'DONE') {
-                            $statusList[] = $key;
-                        }
-                    }
-                    if (! empty($statusList)) {
-                        $query->whereIn('zp_tickets.status', $statusList);
-                    }
+                $statusList = $this->collectStatusKeysByType($scopedProjectIds, 'done');
+                if (! empty($statusList)) {
+                    $query->whereIn('zp_tickets.status', $statusList);
                 }
             } else {
                 $statuses = array_map('intval', explode(',', $searchCriteria['status']));
@@ -1137,10 +1185,6 @@ class Tickets
             ->leftJoin('zp_user as requestor', function ($join) use ($requestorId) {
                 $join->on('requestor.id', '=', $this->connection->raw((int) $requestorId));
             })
-            ->where(function ($q) {
-                $q->where('zp_projects.state', '<>', -1)
-                    ->orWhereNull('zp_projects.state');
-            })
             ->where(function ($q) use ($userId, $clientId) {
                 $q->whereIn('zp_tickets.projectId', function ($subquery) use ($userId) {
                     $subquery->select('projectId')
@@ -1155,16 +1199,35 @@ class Tickets
                     ->orWhere('requestor.role', '>=', 40);
             });
 
-        // Restrict to milestone-type rows. Without this, getAllMilestones
-        // returned ALL ticket rows (tasks, subtasks, etc.) for the project
-        // and the consumer (e.g., the mobile milestone picker, web
-        // timeline view) saw tasks listed as "milestones." The function
-        // name has always implied this filter; making it explicit.
-        $query->where('zp_tickets.type', '=', 'milestone');
+        // Restrict to milestone-type rows only when the caller didn't specify a type at all (e.g. the
+        // mobile milestone picker), so it doesn't get tasks/subtasks listed as milestones. Any caller
+        // that passes an explicit type — a single type, a comma-separated list, or '' from the Roadmap
+        // "Show Tasks" toggle (via normalizeRoadmapParams) — is handled by the whereIn type filter
+        // further below, so a milestone's child tasks come back and nest under it when requested (#3625).
+        if (! isset($searchCriteria['type'])) {
+            $query->where('zp_tickets.type', '=', 'milestone');
+        }
 
-        // Apply search criteria filters
-        if (isset($searchCriteria['currentProject']) && $searchCriteria['currentProject'] != '') {
+        // Apply search criteria filters. A multi-project filter takes precedence over the
+        // single currentProject filter (see getAllBySearchCriteria for rationale).
+        $scopedProjectIds = $this->resolveScopedProjectIds($searchCriteria);
+        if (isset($searchCriteria['projects']) && $searchCriteria['projects'] != '') {
+            if ($scopedProjectIds !== []) {
+                $query->whereIn('zp_tickets.projectId', $scopedProjectIds);
+            } else {
+                // A projects filter was requested but resolved to no valid ids — match nothing.
+                $query->whereRaw('1 = 0');
+            }
+        } elseif (isset($searchCriteria['currentProject']) && $searchCriteria['currentProject'] != '') {
             $query->where('zp_tickets.projectId', $searchCriteria['currentProject']);
+        } else {
+            // No explicit project scope: hide milestones from closed projects to reduce clutter in
+            // cross-project views. An explicitly-opened project/program (above) shows its milestones
+            // regardless of closed state, matching getAllBySearchCriteria (#3626).
+            $query->where(function ($q) {
+                $q->where('zp_projects.state', '<>', -1)
+                    ->orWhereNull('zp_projects.state');
+            });
         }
 
         if (isset($searchCriteria['clients']) && $searchCriteria['clients'] != 0 && $searchCriteria['clients'] != '') {
@@ -1216,30 +1279,14 @@ class Tickets
             $statusArray = explode(',', $searchCriteria['status']);
 
             if (array_search('not_done', $statusArray) !== false) {
-                if ($searchCriteria['currentProject'] != '') {
-                    $statusLabels = $this->getStateLabels($searchCriteria['currentProject']);
-                    $statusList = [];
-                    foreach ($statusLabels as $key => $status) {
-                        if ($status['statusType'] !== 'DONE') {
-                            $statusList[] = $key;
-                        }
-                    }
-                    if (! empty($statusList)) {
-                        $query->whereIn('zp_tickets.status', $statusList);
-                    }
+                $statusList = $this->collectStatusKeysByType($scopedProjectIds, 'not_done');
+                if (! empty($statusList)) {
+                    $query->whereIn('zp_tickets.status', $statusList);
                 }
             } elseif (array_search('done', $statusArray) !== false) {
-                if ($searchCriteria['currentProject'] != '') {
-                    $statusLabels = $this->getStateLabels($searchCriteria['currentProject']);
-                    $statusList = [];
-                    foreach ($statusLabels as $key => $status) {
-                        if ($status['statusType'] === 'DONE') {
-                            $statusList[] = $key;
-                        }
-                    }
-                    if (! empty($statusList)) {
-                        $query->whereIn('zp_tickets.status', $statusList);
-                    }
+                $statusList = $this->collectStatusKeysByType($scopedProjectIds, 'done');
+                if (! empty($statusList)) {
+                    $query->whereIn('zp_tickets.status', $statusList);
                 }
             } else {
                 $statuses = array_map('intval', explode(',', $searchCriteria['status']));
@@ -1590,8 +1637,6 @@ class Tickets
 
             return $ticketId;
         }
-
-        return false;
     }
 
     /**
@@ -1650,7 +1695,7 @@ class Tickets
             $updates[$sanitizedKey] = $value;
 
             if ($key == 'status') {
-                static::dispatch_event('ticketStatusUpdate', ['ticketId' => $id, 'status' => $value, 'action' => 'ticketStatusUpdate']);
+                TicketStatusUpdated::dispatch(ticketId: (int) $id, status: $value, legacyHook: __FUNCTION__);
             }
         }
 
@@ -1722,11 +1767,11 @@ class Tickets
             $updates['kanbanSortIndex'] = $ticketSorting;
         }
 
-        static::dispatch_event('ticketStatusUpdate', ['ticketId' => $ticketId, 'status' => $status, 'action' => 'ticketStatusUpdate', 'handler' => $handler]);
+        TicketStatusUpdated::dispatch(ticketId: (int) $ticketId, status: $status, handler: $handler, legacyHook: __FUNCTION__);
 
         return $this->connection->table('zp_tickets')
             ->where('id', $ticketId)
-            ->update($updates);
+            ->update($updates) > 0;
     }
 
     /**
@@ -1796,6 +1841,47 @@ class Tickets
         if (! empty($historyRows)) {
             $this->connection->table('zp_tickethistory')->insert($historyRows);
         }
+    }
+
+    /**
+     * Status-change history events for a set of tickets within a date range.
+     *
+     * A general reporting primitive. Every time a ticket's status changes,
+     * addTicketChange() writes a zp_tickethistory row (changeType 'status',
+     * changeValue = the new status id, dateModified = timestamp). This returns
+     * those rows for the given tickets over [fromDate, toDate], newest first.
+     *
+     * Deliberately status-config-agnostic: callers resolve changeValue against
+     * their project's status labels to decide which changes count as "to DONE",
+     * "to in progress", etc. That keeps this one query reusable across mobile's
+     * "done today" reflection, throughput/burndown reporting, and strategy-level
+     * progress rollups.
+     *
+     * @param  int[]  $ticketIds
+     * @param  string  $fromDate  inclusive, 'Y-m-d'
+     * @param  string  $toDate  inclusive, 'Y-m-d'
+     * @return array<int, array{ticketId:int, changeValue:string, dateModified:string}>
+     */
+    public function getStatusChangeEvents(array $ticketIds, string $fromDate, string $toDate): array
+    {
+        if (empty($ticketIds)) {
+            return [];
+        }
+
+        $rows = $this->connection->table('zp_tickethistory')
+            ->select('ticketId', 'changeValue', 'dateModified')
+            ->where('changeType', 'status')
+            ->whereIn('ticketId', $ticketIds)
+            ->whereBetween('dateModified', [$fromDate.' 00:00:00', $toDate.' 23:59:59'])
+            ->orderBy('dateModified', 'desc')
+            ->get();
+
+        $events = [];
+        foreach ($rows as $row) {
+            $events[] = (array) $row;
+        }
+
+        return $events;
     }
 
     /**
@@ -1993,7 +2079,7 @@ class Tickets
             ->where('entityAType', 'Ticket')
             ->where('entityBType', 'User')
             ->where('relationship', EntityRelationshipEnum::Collaborator->value)
-            ->delete();
+            ->delete() > 0;
     }
 
     /**

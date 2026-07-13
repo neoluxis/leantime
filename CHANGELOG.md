@@ -1,3 +1,192 @@
+# Version: 3.9.8
+
+## Bug Fixes
+- **Milestones** - Fixed reports showing 0% completion and the timeline "Show Tasks" view displaying nothing (#3624, #3625, #3628)
+- **Milestone Modal** - Resolved focus loss, restored save-and-close, and fixed a 500 error when saving goals (#3605)
+- **To-Dos** - Kept To-Dos from closed projects browsable once the project is reopened (#3626, #3627)
+- **Post-3.9.7 Regressions** - Fixed a file browser out-of-memory issue, strategy grouping, and 403 errors for legacy roles (#3621)
+- **MCP Endpoint** - The /mcp endpoint now accepts Leantime API keys, and a shim for the removed php-mcp provider lets in-place upgrades boot (#3601, #3602, #3607)
+- **Program Board** - Moved the card status dropdown below the field row (#3599)
+
+## Improvements
+- **Sessions** - Isolated sessions into their own Redis database to avoid clashes with other cached data (#3604)
+
+## Dependency Updates
+- Bumped the McpServer submodule to include the bulkAddTasks fix (#3620, #3622)
+- Synced composer.lock content hash with composer.json (#3603)
+
+---
+
+# Version: 3.9.7
+
+## Highlights
+
+### Cross-Project Program Views
+Task views can now span multiple projects as programs, with sprints inherited across the program board so you can plan and track work at a higher level. (#3587)
+
+## New Features
+- **Personal Access Tokens** - Completed the move of personal access token management into core with a dedicated token controller and language keys (#3597)
+- **MCP Domain Tools** - Reorganized MCP tool classes into their respective domain modules (#3581)
+
+## Bug Fixes
+- **Program Board** - Fixed milestones, kanban rendering, and status rollup clarity on the program board (#3592)
+- **MCP Runtime** - Repaired runtime bugs in domain tools uncovered during live end-to-end testing (#3586)
+- **System Update** - System updates now properly clear cached bootstrap manifests.
+- **General Fixes** - Resolved a batch of recently reported bugs (#3540, #3331, #3310, #3589, #3330, #3546, #3593)
+
+## Improvements
+- **API Rate Limit** - Raised the default API rate limit from 10 to 120 requests per minute (#3591)
+
+---
+
+# Version: 3.9.6
+
+## Security
+- **Security Hardening** - Addressed authorization, SSRF, reset-token, LDAP, and stored-XSS vulnerabilities (#3584)
+- **Plugin Management** - Plugin management now requires the proper permission and install input is validated more strictly (#3583)
+- **Avatar Rendering** - User IDs are now encoded in avatar image sources to prevent DOM-based XSS (#3582)
+- **API Responses** - Credentials are now stripped from getUser API responses (#3556, #3576)
+
+## New Features
+- **Content Templates** - Introduced a generic content templates domain (#3493)
+- **My Day Schedule API** - Added a getMyDaySchedule API endpoint that respects work hours and timezone (#3579)
+- **Personal Access Tokens** - Added shared AI/MCP support classes and personal access token management (#3560)
+- **Domain Events** - Added class-based domain events and filters with a legacy-string plugin bridge (#3503)
+
+## Bug Fixes
+- **Project Roles** - Fixed user role inheritance when adding a user to a project (#3580)
+- **Kanban View** - Fixed a rendering error caused by an undefined variable in the kanban view (#3554)
+- **General Fixes** - Resolved a batch of recently reported bugs (#3555, #3575, #3571, #3568, #3569, #3570, #3577, #3535, #3539, #3536, #3542, #3547)
+
+## Improvements
+- **API Routing** - Internal API calls now use canonical domain routes (#3557)
+- **Form Components** - Migrated buttons, text inputs, and textareas to reusable form component primitives (#3564, #3563, #3562, #3558, #3531)
+
+---
+
+# Version: 3.9.5
+
+## New Features
+- **Mobile API Endpoints** - Added session-scoped mobile endpoints for the notifications inbox and calendar (#3529)
+
+## Bug Fixes
+- **Blueprints Canvas** - Fixed a 404 error when adding or editing canvas items (#3544)
+- **Editor Mentions** - The @mention dropdown now appears directly beneath the caret (#3530)
+- **General Fixes** - Resolved several recently reported bugs (#3532)
+
+## Dependency Updates
+- **symfony/yaml** - Promoted to a production dependency (#3543)
+
+---
+
+# Version: 3.9.4
+
+## Bug Fixes
+- **My Work Across Projects** - Fixed an issue that prevented "My Work" from loading tickets across different projects, and exposed and secured the mark-ticket-done action (#3527)
+
+---
+
+# Version: 3.9.3
+
+## Bug Fixes
+- **Bearer Authentication** - Resolved a Bearer token error (-32001) that denied every permission-gated API method for mobile and token-based integrations. The Sanctum-guard session stored the raw role integer instead of the role name the permission engine expects (#3525)
+
+## Improvements
+- **Unified Session Handling** - All authentication paths (web login, API key, and Bearer token) now build the user session through a single factory, so the role and two-factor state can no longer diverge between them. This also makes two-factor handling consistent for token-based authentication and adds clearer diagnostics when an unresolvable role is encountered (#3526)
+- **API Auth Test Coverage** - The Bearer JSON-RPC contract tests now run through the real server auth path and cover non-manager roles, catching authorization regressions for non-admin users that owner-only testing missed (#3526)
+
+---
+
+# Version: 3.9.2
+
+## Bug Fixes
+- **Route Caching** - Automatically recovers from stale route cache and corrects an invalid exception import to prevent routing errors (#3523)
+- **Bearer/PAT Authentication** - Fixed Bearer and personal access token authentication by validating against the core token store (#3522)
+
+---
+
+# Version: 3.9.1
+
+## Bug Fixes
+- **Bearer API Authentication** - Restored user context for Sanctum Bearer API requests, fixing a 3.9.0 regression (#3514)
+
+## Improvements
+- **API Contract Tests** - Added a Bearer-auth JSON-RPC contract test suite with a CI gate (#3513)
+
+---
+
+# Version: 3.9.0
+
+## Highlights
+
+### Native Permission Engine
+A brand-new permission engine now governs access across the entire application, replacing ad-hoc role checks with a centralized, fail-closed authorization layer. The engine was rolled out domain by domain — Tickets, Comments, Users, Clients, Settings, Sprints, Wiki, Ideas, Goals, Blueprints, Canvas, Calendar, Timesheets, Files, Reports, and the Projects service — closing numerous cross-user IDORs and information-disclosure oracles along the way. (#3461, #3469, #3471, #3472, #3473)
+
+### Unified Blueprints Domain
+The 16 separate canvas variant domains have been consolidated into a single unified Blueprints domain with native Laravel controllers, dramatically reducing duplicated code while preserving every canvas type. Legacy Canvas and Strategy code now lives as thin deprecated adapters over Blueprints. (#3483, #3486)
+
+### JSON-RPC API
+A new JSON-RPC API layer replaces the legacy REST/JSON controllers, with migrated endpoints for Tickets, Users, Ideas, Calendar, Notifications, Reactions, Sessions, Submenu, and more, plus a plugin gate attribute and capability-discovery endpoint for extensions. (#3457)
+
+## New Features
+- **Mobile Push Notifications** - Mobile devices can now register Expo/FCM push tokens against access tokens and receive ticket and unread-count notifications via a new dispatcher (#3398, #3401, #3457)
+- **Logic Model Board** - Added a Logic Model canvas board with WorkStructure orchestration (#3455)
+- **WorkStructure Meta-Model** - New WorkStructure meta-model infrastructure underpinning structured work hierarchies (#3454)
+- **Task Collaborators** - Completed multi-collaborator support for tasks, ensuring collaborators always receive ticket notifications and appear with full metadata across list and widget views (#1099)
+- **"Not Assigned" Milestone Filter** - Added a "Not assigned" option to the tickets milestone filter (#3452)
+- **Stage Row Hover Spotlight** - Hovering a stageflow row now spotlights it by dimming non-hovered stages (#3481)
+- **Blade Component Tiers** - Introduced tiered Blade components with a central HTMX event convention (#3441)
+
+## Bug Fixes
+- **Postgres Compatibility** - Fixed write limits, sequences, pdo_pgsql handling, and JS escaping for PostgreSQL deployments (#3447)
+- **Auth & Dashboard 500s** - Hardened authentication and the dashboard against server errors and offline hangs (#3448)
+- **Marketplace 500s** - Stopped marketplace errors by coercing API data into typed model properties (#3446)
+- **Ticket Editor Role on Save** - Enforced the editor role when saving and correctly honored milestone project changes (#3445)
+- **Ticket Modal Milestone Crash** - Fixed a crash in the ticket modal when handling milestone-type items
+- **Milestone & Wiki Dialogs** - Restored data binding in the milestone and wiki dialogs (#3444)
+- **Save Notes from All Notes Grid** - Notes saved from the All Notes grid now land in a default notebook (#3451)
+- **Weekly Timesheet Grid** - Blank cells are now skipped when saving the weekly grid (#3449)
+- **Comment Edit/Reply Box** - The edit and reply box now opens above the replies thread (#3450)
+- **Comments Template Variable** - Stopped the comments template from shadowing the controller's comments array (#3459)
+- **Client Discussion Count** - Fixed an inaccurate discussion count on the client detail page (#3426)
+- **Client Detail 500** - Resolved an undefined constant crash on the client detail page
+- **Value Proposition Canvas** - Fixed an undefined variable on the Value Proposition Canvas (#3402)
+- **Logic Model Status Filter** - Left-aligned the status filter dropdown menu on the Logic Model board (#3484)
+- **Ticket List Variables** - Guarded undefined groupBy/newField variables in ticket list views
+- **Helm Session Expiration Units** - Corrected session expiration units in the Helm chart (#3487, #3378)
+- **Mobile Responsiveness** - Responsive stabilization sweep for phones and tablets (#3442)
+
+## Improvements
+- **Dashboard Performance** - Eliminated full-page repaints and cross-widget loading-indicator churn and sped up hot paths via session locking, query dedupe, and improved event patterns (#3439, #3443)
+- **Thin Controllers** - Modernized every domain controller from `run()` to `get()`/`post()` thin-controller patterns across the entire codebase
+- **Typed Exceptions** - Added a typed exception hierarchy and JSON-RPC response types, with RPC-only service methods throwing typed exceptions on denial
+- **Consolidated Permission Migrations** - Merged the 14 permission-engine migrations into a single install migration (#3506)
+- **Static Analysis** - Raised PHPStan static analysis to level 1 (#3440)
+
+## Security
+- **projectIdParam Validation** - Project ID parameters are now validated as real positive integers and fail closed when a mandatory ID can't be resolved (#3507, #3509)
+- **Projects Service Hardening** - Gated the Projects god-service with recursion-safe manager+ management checks (#3505)
+- **Calendar IDOR Fixes** - Gated the Calendar domain and closed cross-user IDORs (#3504)
+- **Reports Surface Reduction** - Gated the Reports domain and de-exposed the system/telemetry RPC surface (#3501)
+- **Files IDOR Fixes** - Gated the Files domain and closed RPC IDORs (#3492)
+- **Timesheets Authorization** - Gated the Timesheets domain with own-time vs manage separation and matrix edit (#3490)
+- **Goals & Canvas Authorization** - Gated the Goals and consolidated Canvas domains and closed by-id IDORs (#3483, #3485, #3486)
+- **Comment Authorization** - Scoped comment authorization to the host entity's real project and closed the comment-existence oracle in reaction methods
+- **Tags IDOR** - Closed the Tags `getTags` IDOR and removed dead REST controllers
+- **CSRF Hardening** - Excluded install routes from CSRF verification while forms are tokenized
+- **Comprehensive Remediation** - Comprehensive remediation across seven vulnerability families
+
+## Dependency Updates
+- Bumped shell-quote from 1.8.2 to 1.8.4 to clear a critical advisory (#3502)
+- Bumped icalendar and dotlottie-wc, removed Dependabot config (#3438)
+- Bumped webpack-cli from 5.1.4 to 7.0.3 (#3413)
+- Bumped katex from 0.16.21 to 0.17.0 (#3410)
+- Bumped fullcalendar from 6.1.17 to 6.1.20 (#3417)
+- Bumped @fullcalendar/luxon3 from 6.1.17 to 6.1.20 (#3409)
+- Switched html2canvas and jsPDF to npm-managed dependencies (#3482)
+
+---
+
 # Version: 3.8.0
 
 ## Highlights

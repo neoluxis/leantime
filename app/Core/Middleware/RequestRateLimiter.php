@@ -57,8 +57,8 @@ class RequestRateLimiter
 
         $route = $request->getCurrentRoute();
 
-        // Only check rate limits for login page and api calls
-        if ($route != 'auth.login' && ! $request->isApiOrCronRequest()) {
+        // Only check rate limits for login page, api calls, and the MCP endpoint
+        if ($route != 'auth.login' && ! $request->isApiOrCronRequest() && ! $request->isMcpRequest()) {
             return $next($request);
         }
 
@@ -66,11 +66,13 @@ class RequestRateLimiter
         $rateLimitGeneral = $this->config->ratelimitGeneral ?? 10000;
         $rateLimitApi = $this->config->ratelimitApi ?? 100;
         $rateLimitAuth = $this->config->ratelimitAuth ?? 20;
+        $rateLimitMcp = $this->config->ratelimitMcp ?? 300;
 
         if (config('app.debug')) {
             $rateLimitGeneral = 999999999;
             $rateLimitApi = 999999999;
             $rateLimitAuth = 999999999;
+            $rateLimitMcp = 999999999;
         }
 
         // Key
@@ -90,6 +92,12 @@ class RequestRateLimiter
             $apiKey = '';
             // $key = app()->make(Api::class)->getAPIKeyUser($apiKey);
             $limit = $rateLimitApi;
+        }
+
+        // MCP endpoint gets its own (higher) budget: agentic LLM clients legitimately burst
+        // many parallel tool calls per conversation turn, which the API limit would choke on.
+        if ($request->isMcpRequest()) {
+            $limit = $rateLimitMcp;
         }
 
         if ($route == 'auth.login') {
@@ -121,7 +129,7 @@ class RequestRateLimiter
             return new Response(
                 json_encode(['error' => 'Too many requests per minute.']),
                 Response::HTTP_TOO_MANY_REQUESTS,
-                $this->getHeaders($key, $limit),
+                $this->getHeaders($key, (int) $limit),
             );
         }
 
@@ -133,7 +141,7 @@ class RequestRateLimiter
     /**
      * Get rate limiter headers for response.
      */
-    private function getHeaders(string $key, string $limit): array
+    private function getHeaders(string $key, int $limit): array
     {
         return [
             'X-RateLimit-Remaining' => $this->limiter->retriesLeft($key, $limit),

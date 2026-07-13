@@ -5,6 +5,7 @@ namespace Leantime\Domain\Auth\Services;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Contracts\Auth\UserProvider;
 use Laravel\Sanctum\HasApiTokens;
+use Leantime\Domain\Auth\Models\AuthenticatableUser;
 use Leantime\Domain\Auth\Services\Auth as AuthService;
 
 class AuthUser implements UserProvider
@@ -26,12 +27,26 @@ class AuthUser implements UserProvider
 
     public function retrieveById($identifier)
     {
-        return (object) $this->userRepo->getUser($identifier);
+        $userData = $this->userRepo->getUser($identifier);
+
+        // Not found → null, per the UserProvider contract. Returning a (non-null) empty user
+        // object would let the guard treat the request as authenticated.
+        if (empty($userData)) {
+            return null;
+        }
+
+        return new AuthenticatableUser((array) $userData);
     }
 
     public function retrieveByToken($identifier, $token)
     {
-        return (object) $this->authService->getUserByToken($token);
+        $userData = $this->authService->getUserByToken($token);
+
+        if (empty($userData)) {
+            return null;
+        }
+
+        return new AuthenticatableUser((array) $userData);
     }
 
     public function updateRememberToken(Authenticatable $user, $token)
@@ -63,10 +78,12 @@ class AuthUser implements UserProvider
 
     public function getOrCreateUser($user, $source)
     {
+        // Look up the existing account in a separate variable — the $user param holds the
+        // external/OAuth profile data we need to create the account from, so it must not be
+        // overwritten by the lookup result (doing so previously built new users with empty fields).
+        $existingUser = $this->authRepo->getUserByEmail($user['email']);
 
-        $user = $this->authRepo->getUserByEmail($user['email']);
-
-        if (empty($user) && config()->get('auth.create_user')) {
+        if (empty($existingUser) && config()->get('auth.create_user')) {
 
             $userArray = [
                 'firstname' => $user['firstname'],
@@ -83,11 +100,11 @@ class AuthUser implements UserProvider
                 'status' => 'a',
             ];
 
-            $userId = $this->userRepo->addUser($userArray);
-            $user = $this->authRepo->getUserByEmail($user['email']);
+            $this->userRepo->addUser($userArray);
+            $existingUser = $this->authRepo->getUserByEmail($user['email']);
         }
 
-        return $user;
+        return $existingUser;
     }
 
     public function setUser($userId)
@@ -99,22 +116,9 @@ class AuthUser implements UserProvider
 
     protected function setUserSession($user)
     {
-        $currentUser = [
-            'id' => (int) $user['id'],
-            'name' => strip_tags($user['firstname']),
-            'profileId' => $user['profileId'],
-            'mail' => filter_var($user['username'], FILTER_SANITIZE_EMAIL),
-            'clientId' => $user['clientId'],
-            'role' => $user['role'],
-            'settings' => $user['settings'] ? safe_unserialize($user['settings'], []) : [],
-            'twoFAEnabled' => $user['twoFAEnabled'] ?? false,
-            'twoFAVerified' => true, // Auto-verify for API tokens
-            'twoFASecret' => $user['twoFASecret'] ?? '',
-            'isExternalAuth' => false,
-            'createdOn' => ! empty($user['createdOn']) ? dtHelper()->parseDbDateTime($user['createdOn']) : dtHelper()->userNow(),
-            'modified' => ! empty($user['modified']) ? dtHelper()->parseDbDateTime($user['modified']) : dtHelper()->userNow(),
-        ];
-
-        session(['userdata' => $currentUser]);
+        // Sanctum/Bearer-token session. twoFAVerified: true — the token is the strong credential
+        // and no interactive 2FA is possible. Built via the shared factory so role (NAME string,
+        // not raw int) and every other field stay identical to the web + x-api-key paths.
+        session(['userdata' => UserSessionBuilder::build($user, isExternalAuth: false, twoFAVerified: true)]);
     }
 }

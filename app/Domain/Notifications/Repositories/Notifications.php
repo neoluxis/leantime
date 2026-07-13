@@ -17,9 +17,6 @@ class Notifications
         $this->db = $db->getConnection();
     }
 
-    /**
-     * @param  false  $showNewOnly
-     */
     public function getAllNotifications(int $userId, bool $showNewOnly = false, int $limitStart = 0, int $limitEnd = 100, array $filterOptions = []): false|array
     {
         $query = $this->db->table('zp_notifications')
@@ -94,10 +91,11 @@ class Notifications
             ->update(['read' => 1]) > 0;
     }
 
-    public function markNotificationUnread(int $id): bool
+    public function markNotificationUnread(int $id, int $userId): bool
     {
         return $this->db->table('zp_notifications')
             ->where('id', $id)
+            ->where('userId', $userId)
             ->update(['read' => 0]) > 0;
     }
 

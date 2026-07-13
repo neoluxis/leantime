@@ -23,22 +23,7 @@ class Frontcontroller
 {
     use DispatchesEvents;
 
-    /**
-     * @var string - last action that was fired
-     */
-    private string $lastAction = '';
-
-    /**
-     * @var string - fully parsed action
-     */
-    private string $fullAction = '';
-
     private IncomingRequest $incomingRequest;
-
-    /**
-     * @var array - valid status codes
-     */
-    private array $validStatusCodes = ['100', '101', '200', '201', '202', '203', '204', '205', '206', '300', '301', '302', '303', '304', '305', '306', '307', '400', '401', '402', '403', '404', '405', '406', '407', '408', '409', '410', '411', '412', '413', '414', '415', '416', '417', '500', '501', '502', '503', '504', '505'];
 
     protected $defaultRoute = 'dashboard.home';
 
@@ -47,20 +32,17 @@ class Frontcontroller
     /**
      * __construct - Set the rootpath of the server
      *
-     * @param  IncomingRequest  $incomingRequest
      * @return void
      */
     public function __construct(IncomingRequest $request, private PermissionEnforcer $permissionEnforcer)
     {
         $this->incomingRequest = $request;
-        $this->config = config();
+        $this->config = app(Environment::class);
     }
 
     /**
      * run - executes the action depending on Request or firstAction
      *
-     * @param  string  $action
-     * @param  int  $httpResponseCode
      *
      * @throws BindingResolutionException
      */
@@ -76,8 +58,6 @@ class Frontcontroller
 
         // Setting default response code to 200, can be changed in controller
         $this->setResponseCode(200);
-
-        $this->lastAction = $moduleName.'.'.$controllerName.'.'.$method;
 
         $this->dispatchEvent('execute_action_end', ['action' => $controllerName, 'module' => $moduleName]);
 
@@ -173,8 +153,7 @@ class Frontcontroller
     /**
      * executeAction - includes the class in includes/modules by the Request
      *
-     * @param  string  $completeName  actionname.filename
-     * @param  array  $params
+     * @param  string  $controller  actionname.filename
      *
      * @throws BindingResolutionException
      */
@@ -186,7 +165,7 @@ class Frontcontroller
         // Enforce #[RequiresPermission] on the resolved action before instantiating the
         // controller. This is the single chokepoint for every convention-routed controller,
         // regardless of which base class (if any) it extends.
-        $this->permissionEnforcer->enforce($controller, $method, is_array($parameters) ? $parameters : []);
+        $this->permissionEnforcer->enforce($controller, $method, $parameters);
 
         $controllerClass = app()->make($controller);
 
@@ -242,12 +221,30 @@ class Frontcontroller
         $actionPath = $moduleName.'\\'.$controllerType.'\\'.$actionName;
 
         if ($this->config->debug == false) {
-            if (Cache::store('installation')->has('routes.'.$routepath.'.'.$methodNameLower)) {
-                return Cache::store('installation')->get('routes.'.$routepath.'.'.$methodNameLower);
+            $cachedRoute = Cache::store('installation')->get('routes.'.$routepath.'.'.$methodNameLower);
+
+            // Cached routes can outlive a deploy (e.g. a controller's run() replaced by get()/post()).
+            // Only trust the cache if the class and method still exist; otherwise drop it and re-resolve.
+            if (
+                is_array($cachedRoute)
+                && isset($cachedRoute['class'], $cachedRoute['method'])
+                && class_exists($cachedRoute['class'])
+                && method_exists($cachedRoute['class'], $cachedRoute['method'])
+            ) {
+                return $cachedRoute;
+            }
+
+            if ($cachedRoute !== null) {
+                Cache::store('installation')->forget('routes.'.$routepath.'.'.$methodNameLower);
             }
         }
 
         $classPath = $this->getClassPath($controllerType, $moduleName, $actionName);
+
+        if ($classPath === false) {
+            throw new NotFoundHttpException("Can't find a valid controller for ".strip_tags($moduleName).'/'.strip_tags($actionName));
+        }
+
         $classMethod = $this->getValidControllerMethod($classPath, $methodName);
 
         Cache::store('installation')->set('routes.'.$routepath.'.'.($classMethod == 'run' ? $methodNameLower : $classMethod), ['class' => $classPath, 'method' => $classMethod]);
@@ -260,7 +257,7 @@ class Frontcontroller
      *
      * @param  string  $controllerType  The type of controller. Possible values are 'Controllers' or 'Hxcontrollers'.
      **/
-    public function getClassPath(string $controllerType, string $moduleName, string $actionName): string
+    public function getClassPath(string $controllerType, string $moduleName, string $actionName): string|false
     {
 
         $controllerNs = 'Domain';
@@ -405,8 +402,6 @@ class Frontcontroller
         if (is_array($actionParts)) {
             return $actionParts[0];
         }
-
-        return '';
     }
 
     /**
@@ -429,8 +424,7 @@ class Frontcontroller
     /**
      * redirect - redirects an htmx page.
      *
-     * @param  int  $http_response_code
-     * @return RedirectResponse
+     * @param  array  $headers
      */
     public static function redirectHtmx(string $url, $headers = []): Response
     {

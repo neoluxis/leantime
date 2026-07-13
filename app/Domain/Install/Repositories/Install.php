@@ -85,17 +85,13 @@ class Install
         // 30503 (zp_device_tokens) intentionally skipped — superseded by
         // 30504 which puts push columns on zp_access_tokens instead.
         30504,
-        30505,
-        30506,
-        30507,
-        30508,
-        30509,
-        30510,
-        30511,
-        30512,
-        30513,
-        30514,
-        30515,
+        // 30505–30517 (the native-permission-engine rollout: table creation + the per-domain
+        // re-seeds, added one PR at a time) were consolidated into the single 30518 migration.
+        // Pre-release, so no installed DB ran the intermediate versions; fresh installs are
+        // covered by SchemaBuilder + setupDB().
+        30518,
+        30519,
+        30520,
     ];
 
     /**
@@ -141,7 +137,7 @@ class Install
      */
     public function getDBObject(): ?PDO
     {
-        return $this->connection?->getPdo();
+        return $this->connection->getPdo();
     }
 
     /**
@@ -335,6 +331,11 @@ class Install
 
             return true;
         }
+
+        // The version changed: cached routes, plugin lists etc. may reference classes or
+        // methods that no longer exist in the new codebase. Everything in the installation
+        // store is re-derivable, so drop it wholesale before running the updates.
+        Cache::store('installation')->clear();
 
         // Find all update functions that need to be executed
         foreach ($this->dbUpdates as $updateVersion) {
@@ -2177,11 +2178,11 @@ class Install
                 $this->mergeEntityRelationshipTables($pluralTable, $singularTable);
             }
             // Case A: Only plural exists - rename to singular
-            elseif ($pluralExists && ! $singularExists) {
+            elseif ($pluralExists) {
                 $this->connection->statement("RENAME TABLE `{$pluralTable}` TO `{$singularTable}`");
             }
-            // Case E: Neither exists - create singular with correct schema
-            elseif (! $pluralExists && ! $singularExists) {
+            // Case E: Neither exists - create singular with correct schema (plural already ruled out above)
+            elseif (! $singularExists) {
                 $this->createEntityRelationshipTable();
 
                 return true;
@@ -2386,9 +2387,9 @@ class Install
             // Handle any remaining plural table issues
             if ($pluralExists && $singularExists) {
                 $this->mergeEntityRelationshipTables($pluralTable, $singularTable);
-            } elseif ($pluralExists && ! $singularExists) {
+            } elseif ($pluralExists) {
                 $this->connection->statement("RENAME TABLE `{$pluralTable}` TO `{$singularTable}`");
-            } elseif (! $pluralExists && ! $singularExists) {
+            } elseif (! $singularExists) {
                 $this->createEntityRelationshipTable();
 
                 return true;
@@ -2430,9 +2431,9 @@ class Install
             // Handle any remaining plural table issues
             if ($pluralExists && $singularExists) {
                 $this->mergeEntityRelationshipTables($pluralTable, $singularTable);
-            } elseif ($pluralExists && ! $singularExists) {
+            } elseif ($pluralExists) {
                 $this->connection->statement("RENAME TABLE `{$pluralTable}` TO `{$singularTable}`");
-            } elseif (! $pluralExists && ! $singularExists) {
+            } elseif (! $singularExists) {
                 $this->createEntityRelationshipTable();
 
                 return true;
@@ -2673,18 +2674,31 @@ class Install
     }
 
     /**
-     * Migration 30505: Create the native permission engine tables (zp_roles,
-     * zp_permissions, zp_role_permissions — mirrors SchemaBuilder), then sync the
-     * discovered `domain.action` vocabulary and seed the six built-in roles with their
-     * default grants. Idempotent.
+     * Migration 30518 — the single native-permission-engine migration for existing installs.
      *
-     * @return bool|array Returns true on success, array of errors on failure
+     * Creates the three engine tables (zp_roles, zp_permissions, zp_role_permissions — mirroring
+     * {@see \Leantime\Domain\Install\Services\SchemaBuilder}, which covers fresh installs), then
+     * syncs the discovered `domain.action` vocabulary and seeds the six built-in roles with their
+     * default grants.
+     *
+     * This consolidates what was originally rolled out as 30505 (tables + first seed) plus the
+     * per-domain re-seeds 30506–30517 — each an idempotent `flush → sync → seed` that picked up
+     * one more domain's permission provider. syncDiscoveredPermissions() discovers ALL providers
+     * and seedBuiltInRoles() applies the FULL matrix, so one seed reproduces the entire sequence.
+     * Pre-release: no installed DB ran the intermediate versions, so collapsing them is safe and
+     * keeps the migration history honest.
+     *
+     * Idempotent + additive: re-running never drops an admin's customized zp_role_permissions
+     * rows. The registry cache is flushed first so a stale discovered-provider list can't cause a
+     * partial seed.
+     *
+     * @return bool|array True on success, array of error strings on failure.
      */
-    public function update_sql_30505(): bool|array
+    public function update_sql_30518(): bool|array
     {
         try {
-            // The legacy zp_roles rights table was dropped at update_sql_30002. If a stale
-            // copy survives on a very old install it lacks the 'level' column — replace it.
+            // The legacy zp_roles rights table was dropped at update_sql_30002. If a stale copy
+            // survives on a very old install it lacks the 'level' column — replace it.
             if (Schema::hasTable('zp_roles') && ! Schema::hasColumn('zp_roles', 'level')) {
                 Schema::drop('zp_roles');
             }
@@ -2733,283 +2747,97 @@ class Install
                 });
             }
 
-            // Populate the vocabulary, then grant the built-in roles their defaults.
-            $seeder = app(\Leantime\Core\Auth\Permissions\PermissionSeeder::class);
-            $seeder->syncDiscoveredPermissions();
-            $seeder->seedBuiltInRoles();
-        } catch (\Exception $e) {
-            Log::error('Migration 30505: '.$e->getMessage());
-
-            return ['Migration 30505 failed: '.$e->getMessage()];
-        }
-
-        return true;
-    }
-
-    /**
-     * Migration 30506: the Users domain joined the native permission engine. Re-sync the
-     * discovered permission catalog (adds users.view/create/edit/delete/import, all
-     * company-wide) and re-seed the built-in role grants. The engine tables already exist
-     * (created in 30505), so this is table-creation-free. Both seeder calls are idempotent and
-     * additive — re-running never removes an admin's customized zp_role_permissions rows.
-     */
-    public function update_sql_30506(): bool|array
-    {
-        try {
-            // The discovered-provider list is cached cross-request (installation store) outside
-            // debug mode. An install that already ran 30505 cached it WITHOUT UsersPermissions
-            // (which didn't exist then) — seeding against that stale list would never create the
-            // users.* permissions, leaving admin/owner/manager with no user-management grants
-            // (and, with enforcement on, 403'd out of user management). Flush it first.
+            // Populate the vocabulary, then grant the built-in roles their defaults. Flush the
+            // discovered-provider cache first so every domain's permission provider is rediscovered.
             app(\Leantime\Core\Auth\Permissions\PermissionRegistry::class)->flush();
 
             $seeder = app(\Leantime\Core\Auth\Permissions\PermissionSeeder::class);
             $seeder->syncDiscoveredPermissions();
             $seeder->seedBuiltInRoles();
         } catch (\Exception $e) {
-            Log::error('Migration 30506: '.$e->getMessage());
+            Log::error('Migration 30518: '.$e->getMessage());
 
-            return ['Migration 30506 failed: '.$e->getMessage()];
+            return ['Migration 30518 failed: '.$e->getMessage()];
         }
 
         return true;
     }
 
     /**
-     * Migration 30507: the Clients domain joined the native permission engine. Re-sync the
-     * discovered permission catalog (adds clients.view/create/edit/delete, all company-wide)
-     * and re-seed the built-in role grants (admin/owner auto-grant clients.* via the company
-     * wildcard). Table-creation-free; idempotent + additive. Flush the discovered-provider
-     * cache first — an install that already ran 30505/30506 cached the provider list WITHOUT
-     * ClientsPermissions, so seeding against that stale list would never create clients.*.
-     */
-    public function update_sql_30507(): bool|array
-    {
-        try {
-            app(\Leantime\Core\Auth\Permissions\PermissionRegistry::class)->flush();
-
-            $seeder = app(\Leantime\Core\Auth\Permissions\PermissionSeeder::class);
-            $seeder->syncDiscoveredPermissions();
-            $seeder->seedBuiltInRoles();
-        } catch (\Exception $e) {
-            Log::error('Migration 30507: '.$e->getMessage());
-
-            return ['Migration 30507 failed: '.$e->getMessage()];
-        }
-
-        return true;
-    }
-
-    /**
-     * Migration 30508: the Setting domain joined the native permission engine. Re-sync the
-     * discovered permission catalog (adds company.settings.view/edit + projectsettings.labels.manage)
-     * and re-seed the built-in role grants. Table-creation-free; idempotent + additive. Flush the
-     * discovered-provider cache first — an install that already ran 30505-30507 cached the provider
-     * list WITHOUT SettingPermissions, so seeding against that stale list would never create the
-     * new keys (admins would lose the company-settings screen, managers the label dialog).
-     */
-    public function update_sql_30508(): bool|array
-    {
-        try {
-            app(\Leantime\Core\Auth\Permissions\PermissionRegistry::class)->flush();
-
-            $seeder = app(\Leantime\Core\Auth\Permissions\PermissionSeeder::class);
-            $seeder->syncDiscoveredPermissions();
-            $seeder->seedBuiltInRoles();
-        } catch (\Exception $e) {
-            Log::error('Migration 30508: '.$e->getMessage());
-
-            return ['Migration 30508 failed: '.$e->getMessage()];
-        }
-
-        return true;
-    }
-
-    /**
-     * Migration 30509: the Sprints domain joined the native permission engine. Re-sync the
-     * discovered permission catalog (adds sprints.view/create/edit/delete, all project-scoped)
-     * and re-seed the built-in role grants — the standard verbs auto-grant via the existing
-     * project rules (readonly view; editor create/edit/delete; manager+ all). Table-creation-free;
-     * idempotent + additive. Flush the discovered-provider cache first — an install that already
-     * ran 30505-30508 cached the provider list WITHOUT SprintsPermissions, so seeding against that
-     * stale list would never create the sprints.* keys (and lower roles would lose sprint access).
-     */
-    public function update_sql_30509(): bool|array
-    {
-        try {
-            app(\Leantime\Core\Auth\Permissions\PermissionRegistry::class)->flush();
-
-            $seeder = app(\Leantime\Core\Auth\Permissions\PermissionSeeder::class);
-            $seeder->syncDiscoveredPermissions();
-            $seeder->seedBuiltInRoles();
-        } catch (\Exception $e) {
-            Log::error('Migration 30509: '.$e->getMessage());
-
-            return ['Migration 30509 failed: '.$e->getMessage()];
-        }
-
-        return true;
-    }
-
-    /**
-     * Migration 30510: the Wiki domain joined the native permission engine. Re-sync the discovered
-     * permission catalog (adds wiki.view/create/edit/delete, all project-scoped) and re-seed the
-     * built-in role grants — the standard verbs auto-grant via the existing project rules (readonly
-     * view; editor create/edit/delete; manager+ all). Table-creation-free; idempotent + additive.
-     * Flush the discovered-provider cache first — an install that already ran 30505-30509 cached the
-     * provider list WITHOUT WikiPermissions, so seeding against that stale list would never create
-     * the wiki.* keys (and lower roles would lose wiki access).
-     */
-    public function update_sql_30510(): bool|array
-    {
-        try {
-            app(\Leantime\Core\Auth\Permissions\PermissionRegistry::class)->flush();
-
-            $seeder = app(\Leantime\Core\Auth\Permissions\PermissionSeeder::class);
-            $seeder->syncDiscoveredPermissions();
-            $seeder->seedBuiltInRoles();
-        } catch (\Exception $e) {
-            Log::error('Migration 30510: '.$e->getMessage());
-
-            return ['Migration 30510 failed: '.$e->getMessage()];
-        }
-
-        return true;
-    }
-
-    /**
-     * Migration 30511: the Ideas domain joined the native permission engine. Re-sync the discovered
-     * permission catalog (adds ideas.view/create/edit/delete, all project-scoped) and re-seed the
-     * built-in role grants — the standard verbs auto-grant via the existing project rules (readonly
-     * view; editor create/edit/delete; manager+ all). Table-creation-free; idempotent + additive.
-     * Flush the discovered-provider cache first — an install that already ran 30505-30510 cached the
-     * provider list WITHOUT IdeasPermissions, so seeding against that stale list would never create
-     * the ideas.* keys (and lower roles would lose idea access).
-     */
-    public function update_sql_30511(): bool|array
-    {
-        try {
-            app(\Leantime\Core\Auth\Permissions\PermissionRegistry::class)->flush();
-
-            $seeder = app(\Leantime\Core\Auth\Permissions\PermissionSeeder::class);
-            $seeder->syncDiscoveredPermissions();
-            $seeder->seedBuiltInRoles();
-        } catch (\Exception $e) {
-            Log::error('Migration 30511: '.$e->getMessage());
-
-            return ['Migration 30511 failed: '.$e->getMessage()];
-        }
-
-        return true;
-    }
-
-    /**
-     * Sync the permission catalog + re-seed built-in role grants for the Blueprints (canvas)
-     * domain. Adds blueprints.view/create/edit/delete (all project-scoped); the standard verbs
-     * auto-grant via the existing project rules (readonly view; editor create/edit/delete;
-     * manager+ all). Table-creation-free; idempotent + additive.
+     * Migration 30519 — grant the new `plugins.manage` capability to existing installs.
      *
-     * Flush the discovered-provider cache FIRST — an install that already ran the earlier
-     * permission migrations cached the provider list WITHOUT BlueprintsPermissions, so seeding
-     * against that stale list would never create the blueprints.* keys (and every role would
-     * then be denied canvas access, since currentUserCan requires the role to hold the key).
+     * The plugin-management surface (marketplace/folder install, enable, disable, remove,
+     * discover) is now gated by `plugins.manage`. Fresh installs pick this up through the
+     * built-in seed, but installs already past 30518 have no row for the new key — which would
+     * deny everyone, including admins. Sync the vocabulary and grant the key to admin + owner
+     * only. This is a targeted grant, NOT a full reseed, so any custom role edits/revocations
+     * an operator has made are preserved.
      */
-    public function update_sql_30512(): bool|array
+    public function update_sql_30519(): bool|array
     {
         try {
             app(\Leantime\Core\Auth\Permissions\PermissionRegistry::class)->flush();
 
             $seeder = app(\Leantime\Core\Auth\Permissions\PermissionSeeder::class);
             $seeder->syncDiscoveredPermissions();
-            $seeder->seedBuiltInRoles();
-        } catch (\Exception $e) {
-            Log::error('Migration 30512: '.$e->getMessage());
 
-            return ['Migration 30512 failed: '.$e->getMessage()];
+            $repo = app(\Leantime\Core\Auth\Permissions\PermissionRepository::class);
+
+            foreach (['admin', 'owner'] as $roleName) {
+                $role = $repo->getRoleByName($roleName);
+
+                if ($role !== null) {
+                    $repo->grant((int) $role['id'], \Leantime\Domain\Plugins\Permissions\PluginsPermissions::MANAGE);
+                }
+            }
+
+            app(\Leantime\Core\Auth\Permissions\PermissionService::class)->flushCache();
+        } catch (\Exception $e) {
+            Log::error('Migration 30519: '.$e->getMessage());
+
+            return ['Migration 30519 failed: '.$e->getMessage()];
         }
 
         return true;
     }
 
     /**
-     * Sync the permission catalog + re-seed built-in role grants for the Goalcanvas (Goals)
-     * domain. Adds goals.view/create/edit/delete (all project-scoped); the standard verbs
-     * auto-grant via the existing project rules (readonly view; editor create/edit/delete;
-     * manager+ all). Table-creation-free; idempotent + additive.
-     *
-     * Flush the discovered-provider cache FIRST — an install that already ran the earlier
-     * permission migrations cached the provider list WITHOUT GoalcanvasPermissions, so seeding
-     * against that stale list would never create the goals.* keys (and every role would then be
-     * denied goal access, since currentUserCan requires the role to hold the key).
+     * Migration 30520 — grant the new api.manage and connector.manage capabilities to existing
+     * installs. The API-key management and Connector integration surfaces are now permission-gated;
+     * fresh installs pick these up through the built-in seed, but installs already on the permission
+     * engine have no row for the new keys — which would deny everyone, including admins. Sync the
+     * vocabulary and grant both keys to admin + owner only (targeted grant, not a full reseed, so
+     * any custom role edits/revocations are preserved).
      */
-    public function update_sql_30513(): bool|array
+    public function update_sql_30520(): bool|array
     {
         try {
             app(\Leantime\Core\Auth\Permissions\PermissionRegistry::class)->flush();
 
             $seeder = app(\Leantime\Core\Auth\Permissions\PermissionSeeder::class);
             $seeder->syncDiscoveredPermissions();
-            $seeder->seedBuiltInRoles();
+
+            $repo = app(\Leantime\Core\Auth\Permissions\PermissionRepository::class);
+            $keys = [
+                \Leantime\Domain\Api\Permissions\ApiPermissions::MANAGE,
+                \Leantime\Domain\Connector\Permissions\ConnectorPermissions::MANAGE,
+            ];
+
+            foreach (['admin', 'owner'] as $roleName) {
+                $role = $repo->getRoleByName($roleName);
+
+                if ($role !== null) {
+                    foreach ($keys as $key) {
+                        $repo->grant((int) $role['id'], $key);
+                    }
+                }
+            }
+
+            app(\Leantime\Core\Auth\Permissions\PermissionService::class)->flushCache();
         } catch (\Exception $e) {
-            Log::error('Migration 30513: '.$e->getMessage());
+            Log::error('Migration 30520: '.$e->getMessage());
 
-            return ['Migration 30513 failed: '.$e->getMessage()];
-        }
-
-        return true;
-    }
-
-    /**
-     * Sync the permission catalog + re-seed built-in role grants for the Timesheets domain. Adds
-     * timesheets.view/create/edit/delete/manage (all GLOBAL-scoped — company-wide time logging).
-     *
-     * This migration MUST re-seed because the DefaultRolePermissions matrix changed: editor now
-     * gains the four global timesheets keys (own-time) and manager gains timesheets.manage
-     * (company-wide invoicing/reports/others' time). Without re-seeding, those roles would not
-     * hold the new keys and the timesheet pages/API would deny everyone below admin.
-     *
-     * Flush the discovered-provider cache FIRST so TimesheetsPermissions is rediscovered.
-     */
-    public function update_sql_30514(): bool|array
-    {
-        try {
-            app(\Leantime\Core\Auth\Permissions\PermissionRegistry::class)->flush();
-
-            $seeder = app(\Leantime\Core\Auth\Permissions\PermissionSeeder::class);
-            $seeder->syncDiscoveredPermissions();
-            $seeder->seedBuiltInRoles();
-        } catch (\Exception $e) {
-            Log::error('Migration 30514: '.$e->getMessage());
-
-            return ['Migration 30514 failed: '.$e->getMessage()];
-        }
-
-        return true;
-    }
-
-    /**
-     * Sync the permission catalog + re-seed built-in role grants for the Files domain. Adds
-     * files.view/upload/delete (all project-scoped).
-     *
-     * No DefaultRolePermissions matrix edit was needed — these are standard project verbs that
-     * auto-grant through the existing rules (view→readonly+, upload→commenter+, delete→editor+,
-     * manager+ via the project wildcard, admin/owner via scope:any). The re-seed is still required
-     * so the new keys land in zp_role_permissions for the built-in roles.
-     *
-     * Flush the discovered-provider cache FIRST so FilesPermissions is rediscovered.
-     */
-    public function update_sql_30515(): bool|array
-    {
-        try {
-            app(\Leantime\Core\Auth\Permissions\PermissionRegistry::class)->flush();
-
-            $seeder = app(\Leantime\Core\Auth\Permissions\PermissionSeeder::class);
-            $seeder->syncDiscoveredPermissions();
-            $seeder->seedBuiltInRoles();
-        } catch (\Exception $e) {
-            Log::error('Migration 30515: '.$e->getMessage());
-
-            return ['Migration 30515 failed: '.$e->getMessage()];
+            return ['Migration 30520 failed: '.$e->getMessage()];
         }
 
         return true;

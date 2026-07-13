@@ -40,6 +40,18 @@ $hasError = $isActive && !empty($reopenState['error']);
         <input type="hidden" name="sprint" value="{{ session('currentSprint') ?? '' }}" />
         <input type="hidden" name="stay_open" value="0" data-stay-open-input />
 
+        @if (! empty($programBoard) && ! empty($availableProjects))
+            {{-- Program board: a new task must belong to exactly one child project. --}}
+            <div class="form-group">
+                <select name="quickaddProjectId" class="form-control" required aria-label="{{ __('label.project') }}">
+                    <option value="">{{ __('label.project') }}…</option>
+                    @foreach ($availableProjects as $quickAddProjectId => $quickAddProjectName)
+                        <option value="{{ $quickAddProjectId }}">{{ $tpl->escape($quickAddProjectName) }}</option>
+                    @endforeach
+                </select>
+            </div>
+        @endif
+
         <div class="form-group">
             <label for="headline-{{ $statusId }}-{{ $swimlaneKey ?? 'default' }}" class="sr-only">Task name</label>
             <input type="text"
@@ -61,11 +73,11 @@ $hasError = $isActive && !empty($reopenState['error']);
         </div>
 
         <div class="formButtonContainer">
-            <button type="submit" class="btn btn-primary" onclick="this.closest('form').dataset.submitting = 'true'; this.closest('form').querySelector('[data-stay-open-input]').value = '0';">Save</button>
-            <button type="button" class="btn btn-secondary"
+            <x-global::forms.button inputType="submit" contentRole="primary" onclick="this.closest('form').dataset.submitting = 'true'; this.closest('form').querySelector('[data-stay-open-input]').value = '0';">Save</x-global::forms.button>
+            <x-global::forms.button inputType="button" contentRole="secondary"
                     onclick="leantime.kanbanController.toggleQuickAdd(this.closest('.quickaddContainer').querySelector('.quickAddLink'))">
                 Cancel
-            </button>
+            </x-global::forms.button>
             <i class="fa fa-circle-question"
                data-tippy-content="<strong>Keyboard Shortcuts:</strong><br>Enter: Save and close<br>Shift+Enter: Save and add another<br>Esc: Cancel"
                tabindex="0"

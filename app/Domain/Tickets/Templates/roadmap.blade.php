@@ -124,22 +124,25 @@
 
                 $dependencyList = [];
 
-                if ($mlst->dependingTicketId != 0) {
+                // Use explicit > 0 checks: new milestones store dependingTicketId as an empty
+                // string, and under PHP 8 `'' != 0` is true — which pushed an empty dependency and
+                // skipped the real milestoneid, so a dependency set in table mode never rendered here.
+                if ((int) $mlst->dependingTicketId > 0) {
                     $dependencyList[] = $mlst->dependingTicketId;
-                } elseif ($mlst->milestoneid != 0) {
+                } elseif ((int) $mlst->milestoneid > 0) {
                     $dependencyList[] = $mlst->milestoneid;
                 }
 
                 echo "{
                             id :'".$mlst->id."',
-                            name :".json_encode($headline).",
+                            name :".json_encode($headline, JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP).",
                             start :'".(dtHelper()->isValidDateString($mlst->editFrom) ? $mlst->editFrom : dtHelper()->userNow()->addDays(2)->format('Y-m-d'))."',
                             end :'".(dtHelper()->isValidDateString($mlst->editTo) ? $mlst->editTo : dtHelper()->userNow()->addDays(2)->format('Y-m-d'))."',
                             progress :'".format($mlst->percentDone)->decimal()."',
                             dependencies :'".implode(',', $dependencyList)."',
                             custom_class :'',
                             type: '".strtolower($mlst->type)."',
-                            bg_color: '".$color."',
+                            bg_color: ".json_encode($color, JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP).",
                             thumbnail: '".BASE_URL.'/api/users?profileImage='.$mlst->editorId."',
                             sortIndex: ".$sortIndex.'
                         },';

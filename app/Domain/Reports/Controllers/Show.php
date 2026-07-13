@@ -3,11 +3,11 @@
 namespace Leantime\Domain\Reports\Controllers;
 
 use Illuminate\Contracts\Container\BindingResolutionException;
+use Leantime\Core\Auth\Permissions\RequiresPermission;
 use Leantime\Core\Controller\Controller;
 use Leantime\Core\Controller\Frontcontroller;
-use Leantime\Domain\Auth\Models\Roles;
-use Leantime\Domain\Auth\Services\Auth;
 use Leantime\Domain\Projects\Services\Projects as ProjectService;
+use Leantime\Domain\Reports\Permissions\ReportsPermissions;
 use Leantime\Domain\Reports\Services\Reports as ReportService;
 use Leantime\Domain\Sprints\Services\Sprints as SprintService;
 use Leantime\Domain\Tickets\Services\Tickets as TicketService;
@@ -32,8 +32,11 @@ class Show extends Controller
         TicketService $ticketService,
         ReportService $reportService
     ): void {
-        Auth::authOrRedirect([Roles::$owner, Roles::$admin, Roles::$manager, Roles::$editor]);
-
+        // Authorization lives on the action attributes (reports.view, session project) — the
+        // Frontcontroller enforces them BEFORE the controller is instantiated, so init() (and the
+        // dailyIngestion() it triggers) never runs for a denied user. Replaces the legacy
+        // editor+ authOrRedirect (maintainer-approved readonly+ loosening: the page only
+        // aggregates data readonly members already see item-by-item).
         $this->projectService = $projectService;
         $this->sprintService = $sprintService;
         $this->ticketService = $ticketService;
@@ -47,6 +50,7 @@ class Show extends Controller
     /**
      * @throws BindingResolutionException
      */
+    #[RequiresPermission(ReportsPermissions::VIEW)]
     public function get(array $params): Response
     {
         $currentProject = (int) session('currentProject');
@@ -75,13 +79,17 @@ class Show extends Controller
 
         $this->tpl->assign('states', $this->ticketService->getStatusLabels());
 
-        // Milestones
+        // Milestones. getAllMilestones no longer computes percentDone in the query, so backfill each
+        // milestone's completion the same way the Roadmap/timeline does — otherwise the report shows
+        // every milestone at 0% (#3624).
         $allProjectMilestones = $this->ticketService->getAllMilestones(['sprint' => '', 'type' => 'milestone', 'currentProject' => $currentProject]);
+        $allProjectMilestones = $this->ticketService->getBulkMilestoneProgress($allProjectMilestones);
         $this->tpl->assign('milestones', $allProjectMilestones);
 
         return $this->tpl->display('reports.show');
     }
 
+    #[RequiresPermission(ReportsPermissions::VIEW)]
     public function post($params): Response
     {
         return Frontcontroller::redirect(BASE_URL.'/dashboard/show');

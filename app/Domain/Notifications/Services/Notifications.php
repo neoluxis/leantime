@@ -4,7 +4,6 @@ namespace Leantime\Domain\Notifications\Services;
 
 use DOMDocument;
 use Illuminate\Contracts\Container\BindingResolutionException;
-use Leantime\Core\Db\Db as DbCore;
 use Leantime\Core\Language as LanguageCore;
 use Leantime\Core\Mailer as MailerCore;
 use Leantime\Domain\Notifications\Repositories\Notifications as NotificationRepository;
@@ -15,8 +14,6 @@ use Leantime\Domain\Users\Repositories\Users as UserRepository;
  */
 class Notifications
 {
-    private DbCore $db;
-
     private NotificationRepository $notificationsRepo;
 
     private UserRepository $userRepository;
@@ -30,12 +27,10 @@ class Notifications
      * @api
      */
     public function __construct(
-        DbCore $db,
         NotificationRepository $notificationsRepo,
         UserRepository $userRepository,
         LanguageCore $language
     ) {
-        $this->db = $db;
         $this->notificationsRepo = $notificationsRepo;
         $this->userRepository = $userRepository;
         $this->language = $language;
@@ -44,7 +39,7 @@ class Notifications
     /**
      * Not exposed via JSON-RPC: it accepts an arbitrary $userId.
      */
-    public function getAllNotifications($userId, int $showNewOnly = 0, int $limitStart = 0, int $limitEnd = 100, array $filterOptions = []): false|array
+    public function getAllNotifications($userId, bool $showNewOnly = false, int $limitStart = 0, int $limitEnd = 100, array $filterOptions = []): false|array
     {
 
         return $this->notificationsRepo->getAllNotifications($userId, $showNewOnly, $limitStart, $limitEnd, $filterOptions);
@@ -77,7 +72,7 @@ class Notifications
         }
 
         $notificationArray = [
-            'notification' => session('notification') ?? '',
+            'notification' => session('notification'),
             'type' => session('notificationType') ?? '',
             'eventId' => session('eventId') ?? '',
         ];
@@ -119,25 +114,28 @@ class Notifications
     }
 
     /**
-     * Flip a previously-read notification back to unread. Powers the
-     * swipe-to-mark-unread inbox gesture on mobile — symmetric to
-     * markNotificationRead so users can re-surface something they
-     * tapped open accidentally or want to come back to.
+     * Flip a previously-read notification back to unread for the authenticated
+     * (session) user. Powers the swipe-to-mark-unread inbox gesture on mobile —
+     * symmetric to markRead() so users can re-surface something they tapped open
+     * by accident.
      *
-     * Per the mobile-owns-explicit-RPC-params convention, userId is
-     * passed by the client. Scoping isn't critical here (the id is
-     * the primary key) but the param keeps audit logs consistent
-     * with the rest of the Notifications RPC surface.
+     * Session-scoped: the row is matched on (id, session user), so a caller
+     * cannot flip another user's notification unread by guessing its id. (The
+     * id is a global sequence, so an unscoped update would be an IDOR.)
+     *
+     * @param  int  $id  The notification id to mark unread
+     * @return bool True on success
      *
      * @api
      */
-    public function markNotificationUnread(int $id, int $userId): bool
+    public function markNotificationUnread(int $id): bool
     {
-        if ($id <= 0) {
+        $userId = (int) session('userdata.id');
+        if ($id <= 0 || $userId === 0) {
             return false;
         }
 
-        return $this->notificationsRepo->markNotificationUnread($id);
+        return $this->notificationsRepo->markNotificationUnread($id, $userId);
     }
 
     /**
@@ -160,6 +158,43 @@ class Notifications
         // Illuminate ConnectionInterface. Following the established
         // pattern that all SQL lives in the Repository layer.
         return $this->notificationsRepo->getUnreadCount($userId);
+    }
+
+    /**
+     * Inbox listing for the authenticated (session) user. Mobile's inbox tab
+     * calls this with {} and gets only its own notifications (newest first).
+     *
+     * Session-scoped on purpose: getAllNotifications() takes an arbitrary
+     * $userId and is deliberately NOT @api-exposed (it would let a caller read
+     * another user's inbox). This wrapper derives the user from the session,
+     * exactly like getUnreadCount()/markRead() do, so there is nothing to gate.
+     *
+     * (Mark-all-read is already covered by markRead('all').)
+     *
+     * Pagination is clamped and the repo's arbitrary column=>value filter
+     * passthrough is intentionally NOT exposed here — an @api caller gets a
+     * bounded page of its OWN rows only (no caller-supplied WHERE columns, no
+     * unbounded limit).
+     *
+     * @param  int  $showNewOnly  1 = only unread notifications, 0 = all
+     * @param  int  $limitStart  Offset for paging (clamped to >= 0)
+     * @param  int  $limitEnd  Page size (clamped to 1..100)
+     * @return array<int, array<string, mixed>> The session user's notifications, or [] when unauthenticated
+     *
+     * @api
+     */
+    public function getInbox(int $showNewOnly = 0, int $limitStart = 0, int $limitEnd = 50): array
+    {
+        $userId = (int) session('userdata.id');
+        if ($userId === 0) {
+            return [];
+        }
+
+        // Clamp pagination so an @api caller cannot request an unbounded page.
+        $limitStart = max(0, $limitStart);
+        $limitEnd = min(max(1, $limitEnd), 100);
+
+        return $this->notificationsRepo->getAllNotifications($userId, (bool) $showNewOnly, $limitStart, $limitEnd) ?: [];
     }
 
     /**
@@ -319,7 +354,7 @@ class Notifications
             return;
         }
 
-        $authorName = htmlentities($author['firstname']) ?? $this->language->__('label.team_mate');
+        $authorName = htmlentities($author['firstname']);
 
         for ($i = 0; $i < $links->count(); $i++) {
             $taggedUser = $links->item($i)->getAttribute('data-tagged-user-id');

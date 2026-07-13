@@ -13,7 +13,6 @@ use Leantime\Core\Events\DispatchesEvents as EventhelperCore;
 use Leantime\Core\Support\Avatarcreator;
 use Leantime\Domain\Auth\Models\Roles;
 use Leantime\Domain\Users\Repositories\Users as UserRepository;
-use SVG\SVG;
 
 class Projects
 {
@@ -248,6 +247,76 @@ class Projects
     }
 
     /**
+     * Gets all users that can access a project, honoring the project's access level.
+     *
+     * Directly assigned users are always included. On top of that the project's
+     * psettings widen the set: 'all' adds every active user, 'clients' adds the
+     * active users of the project's client. This mirrors isUserAssignedToProject(),
+     * which grants those users access — they must therefore also be offered in
+     * assignee dropdowns (#3331).
+     *
+     * @param  int  $id  The ID of the project.
+     * @param  bool  $includeApiUsers  Whether to include API service-account users.
+     * @return array The users with access to the project.
+     */
+    public function getUsersWithAccessToProject($id, $includeApiUsers = false): array
+    {
+        $project = $this->getProject($id);
+        if ($project === false) {
+            return [];
+        }
+
+        $query = $this->connection->table('zp_user')
+            ->select([
+                'zp_user.id',
+                'zp_user.firstname',
+                'zp_user.lastname',
+                'zp_user.username',
+                'zp_user.notifications',
+                'zp_user.profileId',
+                'zp_user.jobTitle',
+                'zp_user.source',
+                'zp_user.status',
+                'zp_user.modified',
+                'zp_user.role',
+                'zp_relationuserproject.projectRole',
+            ])
+            ->distinct()
+            ->leftJoin('zp_relationuserproject', function ($join) use ($id) {
+                $join->on('zp_user.id', '=', 'zp_relationuserproject.userId')
+                    ->where('zp_relationuserproject.projectId', '=', $id);
+            })
+            ->where(function ($q) use ($project) {
+                $q->whereNotNull('zp_relationuserproject.userId');
+
+                if (($project['psettings'] ?? '') == 'all') {
+                    $q->orWhere('zp_user.status', 'a');
+                } elseif (($project['psettings'] ?? '') == 'clients') {
+                    $q->orWhere(function ($q2) use ($project) {
+                        $q2->where('zp_user.status', 'a')
+                            ->where('zp_user.clientId', $project['clientId']);
+                    });
+                }
+            });
+
+        if ($includeApiUsers === false) {
+            $query->where(function ($q) {
+                $q->whereNull('zp_user.source')
+                    ->orWhere('zp_user.source', '<>', 'api');
+            });
+        }
+
+        $results = $query->orderBy('zp_user.lastname')->get();
+
+        return $results->map(function ($item) {
+            $arr = (array) $item;
+            $arr['firstname'] = $arr['firstname'] ?? $arr['username'];
+
+            return $arr;
+        })->toArray();
+    }
+
+    /**
      * Retrieves the relationship of users assigned to a specific project.
      *
      * @param  int  $id  The ID of the project.
@@ -379,7 +448,7 @@ class Projects
     }
 
     // This populates the projects show all tab and shows users all the projects that they could access
-    public function getProjectsUserHasAccessTo($userId, string $status = 'all', string $clientId = ''): false|array
+    public function getProjectsUserHasAccessTo($userId, string $status = 'all', int $clientId = 0): false|array
     {
         $query = $this->connection->table('zp_projects as project')
             ->select([
@@ -738,7 +807,7 @@ class Projects
             }
         }
 
-        return is_numeric($projectId) ? (int) $projectId : false;
+        return (int) $projectId;
     }
 
     /**
@@ -789,10 +858,24 @@ class Projects
 
         // Add users to relation
         if (is_array($values['assignedUsers']) === true && count($values['assignedUsers']) > 0) {
+            // Roles that may be assigned as a per-project role: every known role key except
+            // admin/owner (they're global-only and never scoped to a single project).
+            $roles = Roles::getRoles();
+            $assignableRoles = array_diff_key($roles, [
+                array_search(Roles::$admin, $roles, true) => null,
+                array_search(Roles::$owner, $roles, true) => null,
+            ]);
+
             foreach ($values['assignedUsers'] as $userId) {
+                $roleValue = (string) ($values['projectRoles']['userProjectRole-'.$userId] ?? '');
+
+                // Only persist a whitelisted, digit-only role key. "inherit", an empty selection,
+                // or any value that isn't a known assignable role leaves the role null, so the user
+                // falls back to their global role instead of being stored with an invalid key
+                // (which would later resolve to "no role" and lock them out of the project).
                 $projectRole = null;
-                if (isset($values['projectRoles']['userProjectRole-'.$userId]) && $values['projectRoles']['userProjectRole-'.$userId] != '40' && $values['projectRoles']['userProjectRole-'.$userId] != '50') {
-                    $projectRole = (int) $values['projectRoles']['userProjectRole-'.$userId];
+                if (ctype_digit($roleValue) && isset($assignableRoles[(int) $roleValue])) {
+                    $projectRole = (int) $roleValue;
                 }
 
                 $this->addProjectRelation($userId, $projectId, $projectRole);
@@ -829,7 +912,7 @@ class Projects
     /**
      * getUserProjectRelation - get all projects related to a user
      *
-     * @param  null  $projectId
+     * @param  int|null  $projectId
      */
     public function getUserProjectRelation($id, $projectId = null): array
     {
@@ -1037,13 +1120,6 @@ class Projects
     }
 
     /**
-     * @return string[]|SVG
-     *
-     * @throws BindingResolutionException
-     */
-    /**
-     * @return array|SVG
-     *
      * @throws BindingResolutionException
      */
     public function getProjectAvatar($id): array|false

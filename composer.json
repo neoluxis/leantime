@@ -94,6 +94,7 @@
         "socialiteproviders/saml2": "^4.7",
         "php-http/guzzle7-adapter": "^1.1",
         "symfony/cache": "^7.2",
+        "symfony/yaml": "^7.2",
         "prism-php/prism": "^0.57.0",
         "inspector-apm/neuron-ai": "1.12.8",
         "johngrogg/ics-parser": "^3",
@@ -101,8 +102,7 @@
         "hkulekci/qdrant": "^0.5.8",
         "league/flysystem-aws-s3-v3": "^3.0",
         "league/flysystem-path-prefixing": "^3.0",
-        "php-mcp/server": "dev-main as 3.1.1",
-        "php-mcp/laravel": "3.0.0"
+        "laravel/mcp": "^0.1.1"
     },
     "require-dev": {
         "roave/security-advisories": "dev-latest",
@@ -134,6 +134,9 @@
                 "app/"
             ]
         },
+        "classmap": [
+            "app/Core/Shims/"
+        ],
         "files": [
             "app/helpers.php"
         ]
@@ -158,14 +161,6 @@
         {
             "type": "vcs",
             "url": "https://github.com/leantime/leantime-documentor.git"
-        },
-        {
-            "type": "vcs",
-            "url": "https://github.com/leantime/php-mcp-server.git"
-        },
-        {
-            "type": "vcs",
-            "url": "https://github.com/Leantime/reactphp-http.git"
         }
     ],
     "config": {
@@ -196,11 +191,6 @@
             "ignore-duplicates": true,
             "include": [
                 "app/Plugins/*/composer.json"
-            ]
-        },
-        "laravel": {
-            "dont-discover": [
-                "php-mcp/laravel"
             ]
         }
     }

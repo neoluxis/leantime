@@ -85,7 +85,7 @@ class ShowTicket extends Controller
                 return Frontcontroller::redirect(BASE_URL.'/tickets/showTicket/'.$id.'#files');
             }
 
-            $this->tpl->setNotification($result['msg'], 'error');
+            $this->tpl->setNotification($this->language->__('notifications.file_deleted_error'), 'error');
         }
 
         // Delete comment
@@ -131,7 +131,7 @@ class ShowTicket extends Controller
         $this->tpl->assign('remainingHours', $this->timesheetService->getRemainingHours($ticket));
 
         $this->tpl->assign('userInfo', $this->userService->getUser(session('userdata.id')));
-        $this->tpl->assign('users', $this->projectService->getUsersAssignedToProject($ticket->projectId));
+        $this->tpl->assign('users', $this->projectService->getUsersWithAccessToProject((int) $ticket->projectId));
 
         $projectData = $this->projectService->getProject($ticket->projectId);
         $this->tpl->assign('projectData', $projectData);
@@ -157,7 +157,7 @@ class ShowTicket extends Controller
         // TODO: Refactor thumbnail generation in file manager
         $this->tpl->assign('imgExtensions', ['jpg', 'jpeg', 'png', 'gif', 'psd', 'bmp', 'tif', 'thm', 'yuv']);
 
-        $allAssignedprojects = $this->projectService->getProjectsUserHasAccessTo(session('userdata.id'), 'open');
+        $allAssignedprojects = $this->projectService->getProjectsUserHasAccessTo(session('userdata.id'));
         $this->tpl->assign('allAssignedprojects', $allAssignedprojects);
 
         $response = $this->tpl->displayPartial('tickets.showTicketModal');

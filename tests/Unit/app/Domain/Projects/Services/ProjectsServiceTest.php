@@ -480,4 +480,219 @@ class ProjectsServiceTest extends TestCase
         $this->assertArrayNotHasKey('id', $patchedValues);
         $this->assertSame(2, $patchedValues['sortIndex']);
     }
+
+    // ---- permission-engine: recursion guardrail ---------------------------
+
+    /**
+     * THE recursion guardrail. The permission engine calls isUserAssignedToProject() and
+     * getProjectRole() during every project-scoped authorization, so those two methods must never
+     * invoke the engine in-body — otherwise authorize() → currentUserCan() → isUserAssignedToProject()
+     * → authorize() → ∞. A PermissionService stub that fails the test if touched proves it.
+     */
+    public function test_access_resolution_methods_never_invoke_the_permission_engine(): void
+    {
+        $projectRepo = $this->make(ProjectRepository::class, [
+            'isUserAssignedToProject' => fn () => true,
+            'getUserProjectRelation' => fn () => [['projectRole' => 'editor']],
+        ]);
+
+        $tripwire = $this->make(\Leantime\Core\Auth\Permissions\PermissionService::class, [
+            'currentUserCan' => fn () => $this->fail('isUserAssignedToProject/getProjectRole must NOT call the permission engine (infinite-recursion guard).'),
+            'authorize' => fn () => $this->fail('access-resolution methods must NOT authorize in-body (infinite-recursion guard).'),
+        ]);
+
+        $service = $this->makeService(projectRepo: $projectRepo);
+        $service->setPermissionService($tripwire);
+
+        // Neither call may touch the engine.
+        $this->assertTrue($service->isUserAssignedToProject(1, 5));
+        $this->assertSame('editor', $service->getProjectRole(1, 5));
+    }
+
+    /**
+     * getProjectRole() must resolve "no explicit role" to '' so callers fall back to the global
+     * role. This locks in the fix for the "Inherit" lockout: the legacy 0 role (written when
+     * "inherit" was cast to int), a missing relation, unknown/junk keys, and admin/owner keys all
+     * map to '', while a real assignable key is returned unchanged.
+     *
+     * @dataProvider projectRoleResolutionProvider
+     */
+    public function test_get_project_role_resolves_inherit_and_junk_to_empty(mixed $stored, string $expected): void
+    {
+        $relation = $stored === '__none__' ? [] : [['projectRole' => $stored]];
+        $projectRepo = $this->make(ProjectRepository::class, [
+            'getUserProjectRelation' => fn () => $relation,
+        ]);
+
+        $service = $this->makeService(projectRepo: $projectRepo);
+
+        $this->assertSame($expected, $service->getProjectRole(1, 5));
+    }
+
+    public static function projectRoleResolutionProvider(): array
+    {
+        return [
+            'legacy int 0 -> inherit' => [0, ''],
+            'legacy string 0 -> inherit' => ['0', ''],
+            'empty string -> inherit' => ['', ''],
+            'no relation row -> inherit' => ['__none__', ''],
+            'unknown numeric key -> inherit' => ['999', ''],
+            'admin key not assignable -> inherit' => ['40', ''],
+            'owner key not assignable -> inherit' => ['50', ''],
+            'valid editor key preserved' => ['20', '20'],
+            'valid readonly key preserved' => ['5', '5'],
+            'legacy inherit sentinel -> inherit' => ['inherit', ''],
+            'legacy inherited sentinel -> inherit' => ['inherited', ''],
+            'legacy uppercase Inherit sentinel -> inherit' => ['Inherit', ''],
+            'legacy role name preserved' => ['editor', 'editor'],
+        ];
+    }
+
+    /**
+     * Reflection lock: the engine-reachable access methods must carry NO #[RequiresPermission]
+     * dispatch attribute (a dispatch gate on them would re-enter the engine), and the mutations/reads
+     * must carry the expected gate. Locks the recursion-safe contract in CI.
+     */
+    public function test_rpc_surface_contract(): void
+    {
+        $gate = function (string $method): ?array {
+            $attrs = (new \ReflectionMethod(ProjectService::class, $method))
+                ->getAttributes(\Leantime\Core\Auth\Permissions\RequiresPermission::class);
+            if ($attrs === []) {
+                return null;
+            }
+            $a = $attrs[0]->newInstance();
+
+            return ['permission' => $a->permission, 'global' => $a->global, 'projectIdParam' => $a->projectIdParam];
+        };
+
+        // Engine-reachable / access-resolution: MUST be ungated (the recursion guard). Note
+        // getUsersAssignedToProject is NOT in this set — the engine never calls it, so it is safely
+        // view-gated below to close its member-list IDOR.
+        foreach (['getProjectRole', 'isUserAssignedToProject', 'getUserProjectRelation', 'userCanManageProject', 'getProjectsUserHasAccessTo'] as $m) {
+            $this->assertNull($gate($m), "$m must carry NO #[RequiresPermission] (recursion guard)");
+        }
+
+        // Mutations: global manager+.
+        foreach (['addProject' => 'projects.create', 'duplicateProject' => 'projects.create', 'editProject' => 'projects.edit', 'patch' => 'projects.edit', 'patchProject' => 'projects.edit', 'updateProjectUsers' => 'projects.edit', 'saveSlackWebhook' => 'projects.edit', 'deleteProject' => 'projects.delete'] as $m => $perm) {
+            $g = $gate($m);
+            $this->assertNotNull($g, "$m must be gated");
+            $this->assertSame($perm, $g['permission'], $m);
+            $this->assertTrue($g['global'], "$m must be global-scoped (manager+ company-wide)");
+        }
+
+        // By-id reads: project-scoped view.
+        foreach (['getProject', 'getProjectProgress', 'getProjectName', 'getProjectIntegrationSettings', 'getProjectCardData', 'getUsersAssignedToProject'] as $m) {
+            $g = $gate($m);
+            $this->assertNotNull($g, "$m must be gated");
+            $this->assertSame('projects.view', $g['permission'], $m);
+            $this->assertNotNull($g['projectIdParam'], "$m must bind to the requested project id");
+        }
+    }
+
+    /**
+     * The $userId-param reads pin to the SESSION user for non-admins, closing the cross-user spoof
+     * (an RPC caller could otherwise list another user's projects by passing a foreign id).
+     */
+    public function test_assigned_to_user_reads_pin_to_session_user_for_non_admins(): void
+    {
+        session(['userdata.id' => 1]);  // non-admin session user
+
+        $capturedUserId = null;
+        $projectRepo = $this->make(ProjectRepository::class, [
+            'getUserProjectRelation' => function ($userId) use (&$capturedUserId) {
+                $capturedUserId = $userId;
+
+                return [];
+            },
+        ]);
+
+        // Caller passes a FOREIGN userId (99); the read must be scoped to the session user (1).
+        $this->makeService(projectRepo: $projectRepo)->getProjectIdAssignedToUser(99);
+
+        $this->assertSame(1, $capturedUserId, 'a non-admin must not be able to read another user\'s project assignments');
+    }
+
+    // ---- Project hierarchy safety (#3540: cyclic parents hung every page via the project selector) ----
+
+    public function test_find_my_children_builds_nested_hierarchy(): void
+    {
+        $projects = [
+            ['id' => 1, 'parent' => 0, 'name' => 'Program'],
+            ['id' => 2, 'parent' => 1, 'name' => 'Project'],
+            ['id' => 3, 'parent' => 2, 'name' => 'Subproject'],
+            ['id' => 4, 'parent' => 0, 'name' => 'Standalone'],
+        ];
+
+        $hierarchy = $this->makeService()->findMyChildren(0, $projects);
+
+        $this->assertCount(2, $hierarchy);
+        $this->assertSame(2, $hierarchy[0]['children'][0]['id']);
+        $this->assertSame(3, $hierarchy[0]['children'][0]['children'][0]['id']);
+        $this->assertArrayNotHasKey('children', $hierarchy[1]);
+    }
+
+    public function test_find_my_children_does_not_recurse_on_self_referential_parent(): void
+    {
+        $projects = [
+            ['id' => 1, 'parent' => 0, 'name' => 'Root'],
+            ['id' => 2, 'parent' => 2, 'name' => 'Self-parented'],
+        ];
+
+        $hierarchy = $this->makeService()->findMyChildren(0, $projects);
+
+        $this->assertCount(1, $hierarchy, 'must terminate instead of recursing on a self-parented project');
+        $this->assertSame(1, $hierarchy[0]['id']);
+    }
+
+    public function test_clean_parent_relationship_reroots_self_parent_and_cycles(): void
+    {
+        $projects = [
+            ['id' => 1, 'parent' => 1, 'name' => 'Self-parented'],
+            ['id' => 2, 'parent' => 3, 'name' => 'Cycle A'],
+            ['id' => 3, 'parent' => 2, 'name' => 'Cycle B'],
+            ['id' => 4, 'parent' => 99, 'name' => 'Orphan'],
+            ['id' => 5, 'parent' => 1, 'name' => 'Valid child'],
+        ];
+
+        $service = $this->makeService();
+        $clean = $service->cleanParentRelationship($projects);
+        $byId = array_column($clean, null, 'id');
+
+        $this->assertSame(0, $byId[1]['parent'], 'self-parent must be re-rooted');
+        $this->assertSame(0, $byId[2]['parent'], 'cycle members must be re-rooted');
+        $this->assertSame(0, $byId[3]['parent'], 'cycle members must be re-rooted');
+        $this->assertSame(0, $byId[4]['parent'], 'orphans must be re-rooted');
+        $this->assertSame(1, $byId[5]['parent'], 'valid parent links must be preserved');
+
+        // The full pipeline must terminate and surface every project.
+        $hierarchy = $service->findMyChildren(0, $clean);
+        $this->assertCount(4, $hierarchy);
+    }
+
+    /**
+     * Regression for #3617: a child whose parent is a top-level strategy/program (parent = NULL)
+     * must stay nested. isset() reports false for a NULL parent value, which previously re-rooted
+     * every such child to 0 and dropped it out of its strategy group in the Projects dropdown.
+     */
+    public function test_clean_parent_relationship_keeps_children_of_top_level_parents(): void
+    {
+        $projects = [
+            ['id' => 1, 'parent' => null, 'name' => 'Strategy'],   // top-level container
+            ['id' => 2, 'parent' => 1, 'name' => 'Project under strategy'],
+            ['id' => 3, 'parent' => 1, 'name' => 'Plan under strategy'],
+        ];
+
+        $service = $this->makeService();
+        $byId = array_column($service->cleanParentRelationship($projects), null, 'id');
+
+        $this->assertSame(1, $byId[2]['parent'], 'child of a NULL-parent strategy must stay nested');
+        $this->assertSame(1, $byId[3]['parent'], 'plan of a NULL-parent strategy must stay nested');
+
+        // And the child must actually appear under the strategy in the assembled hierarchy.
+        $hierarchy = $service->findMyChildren(0, array_values($byId));
+        $this->assertCount(1, $hierarchy, 'only the top-level strategy sits at the root');
+        $this->assertSame(1, $hierarchy[0]['id']);
+        $this->assertCount(2, $hierarchy[0]['children'], 'project and plan nest under the strategy');
+    }
 }

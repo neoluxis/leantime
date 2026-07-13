@@ -156,7 +156,7 @@ class Ldap
                 }
             } else {
                 // OL requires distinguished name login
-                $usernameDN = $this->ldapKeys->username.'='.$username.','.$this->ldapDn;
+                $usernameDN = $this->ldapKeys->username.'='.ldap_escape($username, '', LDAP_ESCAPE_DN).','.$this->ldapDn;
 
                 $bind = @ldap_bind($this->ldapConnection, $usernameDN, $passwordBind);
             }
@@ -179,9 +179,11 @@ class Ldap
     public function getEmail(string $username): string
     {
         if (! $this->ldapConnection) {
-            Log::error('No connection, last error: '.ldap_error($this->ldapConnection));
+            Log::error('LDAP: No connection established');
+
+            return '';
         }
-        $filter = '('.$this->ldapKeys->username.'='.$this->extractLdapFromUsername($username).')';
+        $filter = '('.$this->ldapKeys->username.'='.ldap_escape($this->extractLdapFromUsername($username), '', LDAP_ESCAPE_FILTER).')';
 
         $attr = [$this->ldapKeys->groups, $this->ldapKeys->firstname, $this->ldapKeys->lastname, $this->ldapKeys->email];
 
@@ -203,10 +205,12 @@ class Ldap
     {
 
         if (! $this->ldapConnection) {
-            Log::error('No connection, last error: '.ldap_error($this->ldapConnection));
+            Log::error('LDAP: No connection established');
+
+            return false;
         }
 
-        $filter = '('.$this->ldapKeys->username.'='.$this->extractLdapFromUsername($username).')';
+        $filter = '('.$this->ldapKeys->username.'='.ldap_escape($this->extractLdapFromUsername($username), '', LDAP_ESCAPE_FILTER).')';
 
         $attr = [$this->ldapKeys->groups, $this->ldapKeys->firstname, $this->ldapKeys->lastname, $this->ldapKeys->email, $this->ldapKeys->phone, $this->ldapKeys->jobTitle, $this->ldapKeys->jobLevel, $this->ldapKeys->department];
 
@@ -288,11 +292,9 @@ class Ldap
 
         $getLdap = explode('@', $username);
 
-        if ($getLdap && is_array($getLdap)) {
+        if (is_array($getLdap)) {
             return $getLdap[0];
         }
-
-        return '';
     }
 
     public function getAllMembers(): array|false
@@ -321,7 +323,7 @@ class Ldap
             return $allUsers;
         }
 
-        Log::error('ldap extension not installed', 0);
+        Log::error('ldap extension not installed');
 
         return false;
     }

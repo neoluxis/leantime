@@ -113,7 +113,7 @@
             </div>
             <h3 class="wiki-empty-state-title">{!! __('headlines.no_articles_yet') !!}</h3>
             <p class="wiki-empty-state-text">{!! __('text.create_new_wiki') !!}</p>
-            <a href='#/wiki/wikiModal/' class='inlineEdit btn btn-primary'>{!! __('links.icon.create_new_board') !!}</a>
+            <x-global::forms.button tag="a" link="#/wiki/wikiModal/" class="inlineEdit" contentRole="primary">{!! __('links.icon.create_new_board') !!}</x-global::forms.button>
         </div>
 
     @elseif($wikis && count($wikis) > 0)
@@ -178,9 +178,9 @@
                                             <div class="dropdown-menu"></div>
                                         </div>
                                         <input type="hidden" id="wikiArticleIcon" class="articleIcon" value="{{ e($currentArticle->data) }}" />
-                                        <input type="text"
+                                        <x-global::forms.text-input
                                                id="wikiTitleEditable"
-                                               class="main-title-input"
+                                               variant="headline"
                                                value="{{ e($currentArticle->title) }}"
                                                data-original="{{ e($currentArticle->title) }}"
                                                placeholder="{{ __('input.placeholders.wiki_title') }}"
@@ -388,9 +388,9 @@
                     <!-- Delete (pinned to bottom) -->
                     @if($login::userIsAtLeast($roles::$editor))
                     <div class="wiki-properties-footer">
-                        <a href="#/wiki/delArticle/{{ $currentArticle->id }}" class="wiki-action-btn delete">
+                        <x-global::forms.button tag="a" link="#/wiki/delArticle/{{ $currentArticle->id }}" class="wiki-action-btn delete" state="danger" variant="outline">
                             <i class="fa fa-trash"></i> Delete Article
-                        </a>
+                        </x-global::forms.button>
                     </div>
                     @endif
 
@@ -408,11 +408,11 @@
                 </div>
                 <h3 class="wiki-empty-state-title">{!! __('headlines.no_articles_yet') !!}</h3>
                 <p class="wiki-empty-state-text">{!! __('text.create_new_content') !!}</p>
-                <button class="btn btn-primary"
+                <x-global::forms.button contentRole="primary"
                         hx-post="{{ BASE_URL }}/hx/wiki/articleContent/create"
                         hx-swap="none">
                     <i class="fa fa-plus"></i> {!! __('link.create_article') !!}
-                </button>
+                </x-global::forms.button>
             </div>
         @endif
 
@@ -797,7 +797,14 @@ jQuery(document).ready(function() {
             defaultText: 'Add tag...',
             placeholderColor: 'var(--secondary-font-color)',
             onChange: function(elem, elem_tags) {
-                saveField('tags', elem_tags, function() { updateLastSaved(); });
+                // The tagsInput plugin passes only the single tag that changed as elem_tags, and
+                // fires once with `undefined` during its initial import. Saving elem_tags directly
+                // overwrote the column with just the last tag (and the literal "undefined" on load).
+                // Ignore the init call and persist the full delimited value instead.
+                if (typeof elem_tags === 'undefined') {
+                    return;
+                }
+                saveField('tags', jQuery('#wikiTagsInput').val(), function() { updateLastSaved(); });
             }
         });
     }

@@ -32,45 +32,8 @@ class Auth implements Authenticatable
      */
     private ?int $userId = null;
 
-    /**
-     * @var int|null user id from DB
-     */
-    private ?int $clientId = null;
-
-    /**
-     * @var string|null username from db
-     */
-    private ?string $username = null;
-
-    /**
-     * @var string username from db
-     */
-    private string $name = '';
-
-    /**
-     * @var string profileid (image) from db
-     */
-    private string $profileId = '';
-
     private ?string $password = null;
 
-    /**
-     * @var string|null username (emailaddress)
-     */
-    private ?string $user = null;
-
-    /**
-     * @var string|null username (emailaddress)
-     */
-    private ?string $mail = null;
-
-    private bool $twoFAEnabled;
-
-    private string $twoFASecret;
-
-    /**
-     * @var string|null
-     */
     private ?SessionManager $session = null;
 
     /**
@@ -157,10 +120,13 @@ class Auth implements Authenticatable
             $roleToCheck = session('userdata.projectRole');
         }
 
-        // Ensure the role is a valid role
+        // Ensure the role is a valid role. An unresolvable role here makes the permission engine
+        // deny EVERYTHING (every #[RequiresPermission] check fails) — so log it loudly with
+        // context. This exact breadcrumb ("invalid role detected: 50") is what surfaced the 3.9.x
+        // Bearer regression where a session stored the raw role int instead of its name string.
         if (in_array($roleToCheck, Roles::getRoles()) === false) {
 
-            Log::info('Check for invalid role detected: '.$roleToCheck);
+            Log::warning('Invalid role in session — authorization will deny everything. Resolved role: '.var_export($roleToCheck, true).' (user '.(session('userdata.id') ?? 'guest').'). Expected one of: '.implode(', ', Roles::getRoles()));
 
             return false;
         }
@@ -302,22 +268,11 @@ class Auth implements Authenticatable
             return false;
         }
 
-        $currentUser = [
-            'id' => (int) $user['id'],
-            'globalUserId' => Uuid::uuid5(Uuid::NAMESPACE_DNS, strtolower($user['username'])),
-            'name' => strip_tags($user['firstname']),
-            'profileId' => $user['profileId'],
-            'mail' => filter_var($user['username'], FILTER_SANITIZE_EMAIL),
-            'clientId' => $user['clientId'],
-            'role' => Roles::getRoleString($user['role']),
-            'settings' => $user['settings'] ? safe_unserialize($user['settings'], []) : [],
-            'twoFAEnabled' => $user['twoFAEnabled'] ?? false,
-            'twoFAVerified' => false,
-            'twoFASecret' => $user['twoFASecret'] ?? '',
-            'isExternalAuth' => $isExternalAuth,
-            'createdOn' => ! empty($user['createdOn']) ? dtHelper()->parseDbDateTime($user['createdOn']) : dtHelper()->userNow(),
-            'modified' => ! empty($user['modified']) ? dtHelper()->parseDbDateTime($user['modified']) : dtHelper()->userNow(),
-        ];
+        // Web-login session. twoFAVerified: false — the web flow enforces interactive 2FA via the
+        // AuthCheck gate. Built via the shared factory (role NAME string + consistent fields), with
+        // the web-only globalUserId added on top.
+        $currentUser = UserSessionBuilder::build($user, isExternalAuth: $isExternalAuth, twoFAVerified: false);
+        $currentUser['globalUserId'] = Uuid::uuid5(Uuid::NAMESPACE_DNS, strtolower($user['username']));
 
         $currentUser = self::dispatch_filter('user_session_vars', $currentUser);
 
@@ -332,7 +287,7 @@ class Auth implements Authenticatable
 
     public function updateUserSessionDB(int $userId, string $sessionID): bool
     {
-        return $this->authRepo->updateUserSession($userId, $sessionID, time());
+        return $this->authRepo->updateUserSession($userId, $sessionID, (string) time());
     }
 
     /**
@@ -709,7 +664,7 @@ class Auth implements Authenticatable
 
     public function getRememberToken()
     {
-        return null; // Not implemented yet
+        return ''; // Not implemented yet (Authenticatable::getRememberToken is contractually a string)
     }
 
     public function setRememberToken($value)

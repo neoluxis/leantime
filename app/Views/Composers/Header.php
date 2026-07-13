@@ -78,8 +78,8 @@ class Header extends Composer
             'theme' => $theme,
             'version' => $this->appSettings->appVersion ?? '',
             'themeScripts' => [
-                $this->themeCore->getJsUrl() ?? '',
-                $this->themeCore->getCustomJsUrl() ?? '',
+                $this->themeCore->getJsUrl(),
+                $this->themeCore->getCustomJsUrl(),
             ],
             'themeColorMode' => $colorMode,
             'themeColorScheme' => $colorScheme,
@@ -88,10 +88,10 @@ class Header extends Composer
             'themeStyles' => [
                 [
                     'id' => 'themeStyleSheet',
-                    'url' => $this->themeCore->getStyleUrl() ?? '',
+                    'url' => $this->themeCore->getStyleUrl(),
                 ],
                 [
-                    'url' => $this->themeCore->getCustomStyleUrl() ?? '',
+                    'url' => $this->themeCore->getCustomStyleUrl(),
                 ],
             ],
             'accents' => [

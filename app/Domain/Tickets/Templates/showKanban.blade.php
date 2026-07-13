@@ -8,6 +8,10 @@
     $allTicketGroups = $allTickets;
     $reopenState = session()->get('quickadd_reopen', null);
     $currentGroupBy = $searchCriteria['groupBy'] ?? 'all';
+    // Program (cross-project) board: columns are semantic status types and tickets are placed
+    // by their computed statusType (resolved from each project) instead of the raw status key.
+    $programBoard = $programBoard ?? false;
+    $placementField = $programBoard ? 'statusType' : 'status';
 @endphp
 
 {!! $tpl->displayNotification() !!}
@@ -40,6 +44,13 @@
 
         <div class="clearfix"></div>
 
+        @if ($programBoard)
+            <p class="tw-text-[var(--secondary-font-color)]" style="margin-bottom:15px;">
+                <i class="fa fa-circle-info" aria-hidden="true"></i>
+                {{ __('text.program_status_rollup') }}
+            </p>
+        @endif
+
         @if (isset($allTicketGroups['all']))
             @php $allTickets = $allTicketGroups['all']['items']; @endphp
         @endif
@@ -58,7 +69,7 @@
         @foreach ($allKanbanColumns as $key => $statusRow)
             <div class="column">
                 <h4 class="widgettitle title-primary title-border-{{ $statusRow['class'] }}">
-                    @if ($login::userIsAtLeast($roles::$manager))
+                    @if ($login::userIsAtLeast($roles::$manager) && ! $programBoard)
                         <div class="inlineDropDownContainer" style="float:right;">
                             <a href="javascript:void(0);" class="dropdown-toggle ticketDropDown editHeadline" data-toggle="dropdown">
                                 <i class="fa fa-ellipsis-v" aria-hidden="true"></i>
@@ -84,38 +95,32 @@
                 @php
                 $swimlaneExpanded = ! in_array($group['id'], session('collapsedSwimlanes', []));
                 $groupBy = $searchCriteria['groupBy'] ?? 'status';
-                $groupIdKey = (string) $group['id'];
-                $swimlaneBreakdown = $statusBreakdown[$groupIdKey] ?? $statusBreakdown[$group['id']] ?? [];
+                $groupId = $group['id'];
+                $groupIdKey = (string) $groupId;
+                $swimlaneBreakdown = $statusBreakdown[$groupIdKey] ?? $statusBreakdown[$groupId] ?? [];
                 $statusCounts = $swimlaneBreakdown['statusCounts'] ?? [];
                 $timeAlert = $swimlaneBreakdown['timeAlert'] ?? null;
                 @endphp
                 <div class="kanban-swimlane-row" data-expanded="{{ $swimlaneExpanded ? 'true' : 'false' }}" id="swimlane-row-{{ $group['id'] }}">
                     <div class="kanban-swimlane-sentinel" data-swimlane-id="{{ $group['id'] }}" aria-hidden="true"></div>
 
-                    {!! app('blade.compiler')::render(
-                        '<x-global::kanban.swimlane-row-header
-                            :groupBy="$groupBy"
-                            :groupId="$groupId"
-                            :label="$label"
-                            :totalCount="$totalCount"
-                            :statusCounts="$statusCounts"
-                            :statusColumns="$statusColumns"
-                            :expanded="$expanded"
-                            :moreInfo="$moreInfo"
-                            :timeAlert="$timeAlert"
-                        />',
-                        [
-                            'groupBy' => $groupBy,
-                            'groupId' => $group['id'],
-                            'label' => $group['label'],
-                            'totalCount' => $swimlaneBreakdown['totalCount'] ?? count($group['items']),
-                            'statusCounts' => $statusCounts,
-                            'statusColumns' => $allKanbanColumns,
-                            'expanded' => $swimlaneExpanded,
-                            'moreInfo' => $group['more-info'] ?? null,
-                            'timeAlert' => $group['timeAlert'] ?? null,
-                        ]
-                    ) !!}
+                    {{-- Render the component directly. It was previously invoked via
+                         app('blade.compiler')::render('<x-...>', $data), but a <x-component> string
+                         passed to Blade::render from inside an already-compiled view gets its bare
+                         variables ($label, $groupId, …) pre-compiled by the outer pass and they are
+                         not in the inner render scope — throwing "Undefined variable" for ANY
+                         kanban group-by. A plain component tag with inline expressions is correct. --}}
+                    <x-global::kanban.swimlane-row-header
+                        :groupBy="$groupBy"
+                        :groupId="$group['id']"
+                        :label="$group['label']"
+                        :totalCount="$swimlaneBreakdown['totalCount'] ?? count($group['items'])"
+                        :statusCounts="$statusCounts"
+                        :statusColumns="$allKanbanColumns"
+                        :expanded="$swimlaneExpanded"
+                        :moreInfo="$group['more-info'] ?? null"
+                        :timeAlert="$group['timeAlert'] ?? null"
+                    />
 
                     <div class="kanban-swimlane-content{{ !$swimlaneExpanded ? ' collapsed' : '' }}" id="swimlane-content-{{ $group['id'] }}">
             @endif
@@ -130,7 +135,7 @@
                                 $hasTickets = false;
                                 if (isset($allTickets)) {
                                     foreach ($allTickets as $ticket) {
-                                        if (isset($ticket['status']) && $ticket['status'] == $key) {
+                                        if (isset($ticket[$placementField]) && $ticket[$placementField] == $key) {
                                             $hasTickets = true;
                                             break;
                                         }
@@ -154,10 +159,12 @@
                                         'swimlaneKey' => $group['value'] ?? $group['id'] ?? null,
                                         'isEmpty' => isset($emptyColumns[$key]),
                                         'currentGroupBy' => $searchCriteria['groupBy'] ?? null,
+                                        'programBoard' => $programBoard,
+                                        'availableProjects' => $availableProjects ?? null,
                                     ])
 
                                     @foreach ($allTickets as $row)
-                                        @if ($row['status'] == $key)
+                                        @if (($row[$placementField] ?? null) == $key)
                                         <div class="ticketBox moveable container priority-border-{{ $row['priority'] }}" id="ticket_{{ $row['id'] }}">
 
                                             <div class="row" >
@@ -295,6 +302,31 @@
                                             </div>
                                             <div class="clearfix"></div>
 
+                                            @if ($programBoard)
+                                                {{-- Cross-project board: columns are semantic stages, so give each card a
+                                                     dropdown of its OWN project's real statuses (e.g. "Blocked") to set the
+                                                     detailed status directly. patchTicket writes a key valid in that project,
+                                                     so it stays orphan-safe. Also show which project the task belongs to. --}}
+                                                @php $rowProjectStatuses = $statusLabelsByProject[$row['projectId']] ?? []; @endphp
+                                                @php $rowProjectStatus = $rowProjectStatuses[$row['status']] ?? null; @endphp
+                                                <div style="margin-top:4px;">
+                                                    <div class="dropdown ticketDropdown statusDropdown colorized show" style="display:inline-block;">
+                                                        <a class="dropdown-toggle status {{ $rowProjectStatus['class'] ?? 'label-default' }} f-left" href="javascript:void(0);" role="button" id="statusDropdownMenuLink{{ $row['id'] }}" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+                                                            <span class="text">{{ $tpl->escape($rowProjectStatus['name'] ?? __('label.new')) }}</span>&nbsp;<i class="fa fa-caret-down" aria-hidden="true"></i>
+                                                        </a>
+                                                        <ul class="dropdown-menu" aria-labelledby="statusDropdownMenuLink{{ $row['id'] }}">
+                                                            <li class="nav-header border">{!! __('dropdown.choose_status') !!}</li>
+                                                            @php
+                                                            foreach ($rowProjectStatuses as $statusKey => $statusOption) {
+                                                                echo "<li class='dropdown-item'><a href='javascript:void(0);' class='".$statusOption['class']."' data-label='".$tpl->escape($statusOption['name'])."' data-value='".$row['id'].'_'.$statusKey.'_'.$statusOption['class']."' id='ticketStatusChange".$row['id'].$statusKey."'>".$tpl->escape($statusOption['name']).'</a></li>';
+                                                            }
+                                                            @endphp
+                                                        </ul>
+                                                    </div>
+                                                    <small class="tw-text-[var(--secondary-font-color)]">{{ $tpl->escape($row['projectName'] ?? '') }}</small>
+                                                </div>
+                                            @endif
+
                                             @if ($row['commentCount'] > 0 || $row['subtaskCount'] > 0 || $row['tags'] != '')
                                             <div class="row">
                                                 <div class="col-md-12 border-top" style="white-space: nowrap;">
@@ -358,9 +390,24 @@
         leantime.ticketsController.initEffortDropdown();
         leantime.ticketsController.initPriorityDropdown();
 
+        @if ($programBoard)
+            {{-- Per-card status dropdown (program board only): set the exact project status. --}}
+            leantime.ticketsController.initStatusDropdown();
+        @endif
 
-        var ticketStatusList = [@foreach ($allTicketStates as $key => $statusRow)'{{ $key }}',@endforeach];
-        leantime.ticketsController.initTicketKanban(ticketStatusList);
+
+        @if ($programBoard)
+            {{-- Program board: columns are status types; drag persists per-project via the plugin. --}}
+            var ticketStatusList = [@foreach ($allKanbanColumns as $key => $statusRow)'{{ $key }}',@endforeach];
+            if (leantime.pgmProBoard && typeof leantime.pgmProBoard.initProgramKanban === 'function') {
+                leantime.pgmProBoard.initProgramKanban(ticketStatusList);
+            } else {
+                console.warn('PgmPro board JS is not loaded; program kanban drag-and-drop is disabled.');
+            }
+        @else
+            var ticketStatusList = [@foreach ($allTicketStates as $key => $statusRow)'{{ $key }}',@endforeach];
+            leantime.ticketsController.initTicketKanban(ticketStatusList);
+        @endif
 
     @else
         leantime.authController.makeInputReadonly(".maincontentinner");
