@@ -53,10 +53,14 @@ leantime.snippets = (function () {
             submenuState = "closed";
         }
 
-        leantime.rpc('Api.Api.setSubmenuState', {
-            submenu : submenuName,
-            state   : submenuState
-        }).catch(function (e) { console.error('Could not persist accordion state', e); });
+        jQuery.ajax({
+            type : 'PATCH',
+            url  : leantime.appUrl + '/api/submenu',
+            data : {
+                submenu : submenuName,
+                state   : submenuState
+            }
+        });
 
     };
 
@@ -90,16 +94,7 @@ leantime.snippets = (function () {
 
     var toggleFont = function (font) {
 
-        jQuery("#fontStyleSetter").html(":root { --primary-font-family: '"+font+"', var(--cjk-font-family), 'Helvetica Neue', Helvetica, sans-serif; }")
-
-
-    };
-
-    var toggleCjkFont = function (font) {
-
-        var fallback = "'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Source Han Sans SC', sans-serif";
-        var prefix = font ? "'" + font + "', " : "";
-        jQuery("#cjkFontStyleSetter").html(":root { --cjk-font-family: " + prefix + fallback + "; }")
+        jQuery("#fontStyleSetter").html(":root { --primary-font-family: '"+font+"', 'Helvetica Neue', Helvetica, sans-serif; }")
 
 
     };
@@ -121,7 +116,6 @@ leantime.snippets = (function () {
         accordionToggle:accordionToggle,
         toggleTheme:toggleTheme,
         toggleFont:toggleFont,
-        toggleCjkFont:toggleCjkFont,
         toggleColors:toggleColors,
         toggleBg:toggleBg
     };
