@@ -708,6 +708,11 @@ class Users extends BaseService
             $themeFont = 'Roboto';
         }
 
+        $themeCjkFont = $this->settingsService->getSetting('usersettings.'.$userId.'.themeCjkFont');
+        if ($themeCjkFont === false) {
+            $themeCjkFont = '';
+        }
+
         $userDateFormat = $this->settingsService->getSetting('usersettings.'.$userId.'.date_format');
         $userTimeFormat = $this->settingsService->getSetting('usersettings.'.$userId.'.time_format');
 
@@ -742,6 +747,7 @@ class Users extends BaseService
             'userLang' => $userLang,
             'userTheme' => $userTheme,
             'themeFont' => $themeFont,
+            'themeCjkFont' => $themeCjkFont,
             'userColorMode' => $userColorMode,
             'userColorScheme' => $userColorScheme,
             'languageList' => $this->language->getLanguageList(),
@@ -751,6 +757,10 @@ class Users extends BaseService
             'timezone' => $timezone,
             'availableColorSchemes' => $availableColorSchemes,
             'availableFonts' => $this->themeCore->getAvailableFonts(),
+            'availableCjkFonts' => [
+                'systemDefault' => '',
+                'lxgwWenKai' => 'LXGW WenKai',
+            ],
             'availableThemes' => $this->themeCore->getAll(),
             'timezoneOptions' => timezone_identifiers_list(),
         ];
@@ -918,7 +928,7 @@ class Users extends BaseService
      * matching theme/cache side effects so the change takes effect immediately.
      *
      * @param  int  $userId  The id of the user being edited.
-     * @param  array<string, mixed>  $post  Raw request input (theme, colormode, colorscheme, themeFont).
+     * @param  array<string, mixed>  $post  Raw request input (theme, colormode, colorscheme, themeFont, themeCjkFont).
      *
      * @api
      */
@@ -931,11 +941,15 @@ class Users extends BaseService
         $postColorMode = htmlentities($post['colormode'] ?? 'light');
         $postColorScheme = htmlentities($post['colorscheme'] ?? 'themeDefault');
         $themeFont = htmlentities($post['themeFont'] ?? '');
+        $themeCjkFont = htmlentities($post['themeCjkFont'] ?? '');
 
         $this->settingsService->saveSetting('usersettings.'.$userId.'.theme', $postTheme);
         $this->settingsService->saveSetting('usersettings.'.$userId.'.colorMode', $postColorMode);
         $this->settingsService->saveSetting('usersettings.'.$userId.'.colorScheme', $postColorScheme);
         $this->settingsService->saveSetting('usersettings.'.$userId.'.themeFont', $themeFont);
+        $this->settingsService->saveSetting('usersettings.'.$userId.'.themeCjkFont', $themeCjkFont);
+
+        session(['usersettings.themeCjkFont' => $themeCjkFont]);
 
         $this->themeCore::clearCache();
         $this->themeCore->setActive($postTheme);

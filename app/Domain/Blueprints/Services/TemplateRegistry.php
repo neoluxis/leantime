@@ -35,6 +35,12 @@ class TemplateRegistry
             return null;
         }
 
+        if (! class_exists(Yaml::class)) {
+            $this->templates[$slug] = null;
+
+            return null;
+        }
+
         $data = Yaml::parseFile($path);
         $template = new CanvasTemplate($data);
         $this->templates[$slug] = $template;

@@ -814,14 +814,26 @@
         var popover = document.createElement('div');
         popover.className = 'tiptap-font-popover';
 
-        var list = '<div class="tiptap-font-popover__list">';
-        fonts.forEach(function(font) {
-            var style = font.value ? 'font-family: ' + font.value : '';
-            list += '<button type="button" class="tiptap-font-popover__btn" data-font="' + (font.value || '') + '" style="' + style + '">' + font.name + '</button>';
-        });
-        list += '</div>';
+        var list = document.createElement('div');
+        list.className = 'tiptap-font-popover__list';
 
-        popover.innerHTML = list;
+        fonts.forEach(function(font) {
+            var fontButton = document.createElement('button');
+            fontButton.type = 'button';
+            fontButton.className = 'tiptap-font-popover__btn';
+            fontButton.textContent = font.name;
+
+            if (font.value) {
+                fontButton.dataset.font = font.value;
+                fontButton.style.fontFamily = font.value;
+            } else {
+                fontButton.dataset.font = '';
+            }
+
+            list.appendChild(fontButton);
+        });
+
+        popover.appendChild(list);
 
         // Position popover below button
         var buttonRect = button.getBoundingClientRect();

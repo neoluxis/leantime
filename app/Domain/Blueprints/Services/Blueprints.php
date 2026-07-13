@@ -520,6 +520,11 @@ class Blueprints extends BaseService
 
             if (! isset($results[$canvasType][$row['canvasId']])) {
                 $template = $this->templateRegistry->getByDatabaseType($canvasType);
+
+                if ($template === null) {
+                    continue;
+                }
+
                 $results[$canvasType][$row['canvasId']] = [];
 
                 if ($template !== null) {
@@ -734,6 +739,10 @@ class Blueprints extends BaseService
         $recentProgressCanvas = [];
 
         foreach ($recentlyUpdatedCanvas as $canvas) {
+            if (! isset($boardMetadata[$canvas['type']])) {
+                continue;
+            }
+
             if (! isset($recentProgressCanvas[$canvas['type']])) {
                 $recentProgressCanvas[$canvas['type']] = $boardMetadata[$canvas['type']];
                 $recentProgressCanvas[$canvas['type']]['count'] = 1;

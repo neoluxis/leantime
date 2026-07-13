@@ -45,6 +45,17 @@ class Header extends Composer
         $colorMode = $this->themeCore->getColorMode();
         $colorScheme = $this->themeCore->getColorScheme();
         $themeFont = $this->themeCore->getFont();
+        $themeCjkFont = '';
+
+        if (session()->exists('usersettings.themeCjkFont')) {
+            $themeCjkFont = session('usersettings.themeCjkFont') ?: '';
+        } elseif (session()->has('userdata.id')) {
+            $themeCjkFont = $this->settingsRepo->getSetting('usersettings.'.session('userdata.id').'.themeCjkFont');
+            if ($themeCjkFont === false) {
+                $themeCjkFont = '';
+            }
+            session(['usersettings.themeCjkFont' => $themeCjkFont]);
+        }
 
         // Set colors to use
         if (! session()->exists('companysettings.sitename')) {
@@ -73,6 +84,7 @@ class Header extends Composer
             'themeColorMode' => $colorMode,
             'themeColorScheme' => $colorScheme,
             'themeFont' => $themeFont,
+            'themeCjkFont' => $themeCjkFont,
             'themeStyles' => [
                 [
                     'id' => 'themeStyleSheet',

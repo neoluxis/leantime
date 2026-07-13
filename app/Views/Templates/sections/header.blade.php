@@ -91,9 +91,15 @@
     @endforeach
 </style>
 
+<style id="cjkFontStyleSetter">
+    :root {
+        --cjk-font-family: @if(!empty($themeCjkFont)) '{{{ $themeCjkFont }}}', @endif 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Source Han Sans SC', sans-serif;
+    }
+</style>
+
 <style id="fontStyleSetter">
     :root {
-        --primary-font-family: '{{{ $themeFont }}}', 'Helvetica Neue', Helvetica, sans-serif;
+        --primary-font-family: '{{{ $themeFont }}}', var(--cjk-font-family), 'Helvetica Neue', Helvetica, sans-serif;
     }
 </style>
 

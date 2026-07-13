@@ -318,13 +318,26 @@
                                 <div class="row">
                                     <div class="col-md-12">
                                         <hr />
-                                        <label>Font</label>
+                                        <label>Western Font</label>
                                         @foreach($availableFonts as $key => $font)
 
                                             <x-global::selectable  :selected="($themeFont == $font) ? 'true' : ''" :id="$key" :name="'themeFont'" :value="$font" :label="$font" onclick="leantime.snippets.toggleFont('{{ $font }}')">
                                                 <label for="selectable-{{ $key }}" class="font tw-w-[200px]"
                                                        style="font-family:'{{ $font }}'; font-size:16px;">
                                                     The quick brown fox jumps over the lazy dog
+                                                </label>
+                                            </x-global::selectable>
+
+                                        @endforeach
+
+                                        <hr />
+                                        <label>Chinese Font</label>
+                                        @foreach($availableCjkFonts as $key => $font)
+
+                                            <x-global::selectable :selected="($themeCjkFont == $font) ? 'true' : ''" :id="'cjk-'.$key" :name="'themeCjkFont'" :value="$font" :label="($font !== '' ? $font : 'System Default')" onclick="leantime.snippets.toggleCjkFont(@js($font))">
+                                                <label for="selectable-cjk-{{ $key }}" class="font tw-w-[260px]"
+                                                       style="@if($font !== '')font-family:'{{ $font }}';@else font-family:var(--primary-font-family);@endif font-size:16px;">
+                                                    你好世界こんにちは안녕하세요
                                                 </label>
                                             </x-global::selectable>
 
