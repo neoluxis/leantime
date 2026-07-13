@@ -81,6 +81,7 @@ class Install
         30413,
         30500,
         30501,
+        30600,
     ];
 
     /**
@@ -2493,6 +2494,42 @@ class Install
             Log::error('Migration 30501: '.$e->getMessage());
 
             return ['Migration 30501 failed: '.$e->getMessage()];
+        }
+
+        return true;
+    }
+
+    /**
+     * update_sql_30600 - Add folder management to files
+     */
+    public function update_sql_30600(): bool|array
+    {
+        try {
+            if (! Schema::hasTable('zp_file_folder')) {
+                Schema::create('zp_file_folder', function (Blueprint $table) {
+                    $table->id();
+                    $table->string('name', 255);
+                    $table->string('module', 50)->nullable();
+                    $table->integer('moduleId')->nullable();
+                    $table->unsignedBigInteger('parentId')->nullable();
+                    $table->integer('userId')->nullable();
+                    $table->dateTime('date')->nullable();
+
+                    $table->index(['module', 'moduleId'], 'idx_folder_module');
+                    $table->index('parentId', 'idx_folder_parent');
+                });
+            }
+
+            if (Schema::hasTable('zp_file') && ! Schema::hasColumn('zp_file', 'folderId')) {
+                Schema::table('zp_file', function (Blueprint $table) {
+                    $table->unsignedBigInteger('folderId')->nullable()->after('date');
+                    $table->index('folderId', 'idx_file_folderId');
+                });
+            }
+        } catch (\Exception $e) {
+            Log::error('Migration 30600: '.$e->getMessage());
+
+            return ['Migration 30600 failed: '.$e->getMessage()];
         }
 
         return true;

@@ -44,8 +44,9 @@ class Files extends Controller
         if (isset($_FILES['file']) && isset($_GET['module']) && isset($_GET['moduleId'])) {
             $module = htmlentities($_GET['module']);
             $id = (int) $_GET['moduleId'];
+            $folderId = isset($_GET['folderId']) && $_GET['folderId'] !== '' ? (int) $_GET['folderId'] : null;
 
-            $result = $this->fileService->upload($_FILES, $module, $id);
+            $result = $this->fileService->upload($_FILES, $module, $id, null, 'default', $folderId);
             if (is_string($result)) {
                 return $this->tpl->displayJson(['status' => 'error', 'message' => $result], 500);
             } else {
@@ -56,7 +57,8 @@ class Files extends Controller
         if (isset($_FILES['file'])) {
             // For image paste uploads
             $_FILES['file']['name'] = 'pastedImage.png';
-            $file = $this->fileService->upload($_FILES, 'project', session('currentProject'));
+            $folderId = isset($_GET['folderId']) && $_GET['folderId'] !== '' ? (int) $_GET['folderId'] : null;
+            $file = $this->fileService->upload($_FILES, 'project', session('currentProject'), null, 'default', $folderId);
 
             if (is_array($file)) {
                 return new Response(BASE_URL.'/files/get?'

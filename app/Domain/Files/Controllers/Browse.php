@@ -26,7 +26,8 @@ class Browse extends Controller
 
         if (isset($_POST['upload']) || isset($_FILES['file'])) {
             if (isset($_FILES['file'])) {
-                $this->filesService->upload($_FILES, 'project', session('currentProject'));
+                $folderId = isset($_POST['folderId']) && $_POST['folderId'] !== '' ? (int) $_POST['folderId'] : null;
+                $this->filesService->upload($_FILES, 'project', session('currentProject'), null, 'default', $folderId);
                 $this->tpl->setNotification('notifications.file_upload_success', 'success', 'file_created');
             } else {
                 $this->tpl->setNotification('notifications.file_upload_error', 'error');

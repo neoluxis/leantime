@@ -34,6 +34,7 @@ class SchemaBuilder
         $this->createClientsTable();
         $this->createCommentTable();
         $this->createFileTable();
+        $this->createFileFolderTable();
         $this->createGcallinksTable();
         $this->createNoteTable();
         $this->createProjectsTable();
@@ -283,8 +284,29 @@ class SchemaBuilder
             $table->string('encName', 255)->nullable();
             $table->string('realName', 255)->nullable();
             $table->dateTime('date')->nullable();
+            $table->unsignedBigInteger('folderId')->nullable();
 
             $table->index(['module', 'moduleId', 'userId'], 'idx_file_module_moduleId_userId');
+            $table->index('folderId', 'idx_file_folderId');
+        });
+    }
+
+    /**
+     * Create zp_file_folder table.
+     */
+    private function createFileFolderTable(): void
+    {
+        Schema::create('zp_file_folder', function (Blueprint $table) {
+            $table->id();
+            $table->string('name', 255);
+            $table->string('module', 50)->nullable();
+            $table->integer('moduleId')->nullable();
+            $table->unsignedBigInteger('parentId')->nullable();
+            $table->integer('userId')->nullable();
+            $table->dateTime('date')->nullable();
+
+            $table->index(['module', 'moduleId'], 'idx_folder_module');
+            $table->index('parentId', 'idx_folder_parent');
         });
     }
 

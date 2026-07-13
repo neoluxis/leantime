@@ -41,7 +41,7 @@ class Files
      *
      * @api
      */
-    public function upload($file, $module, $moduleId, $entity = null, $disk = 'default'): array|string
+    public function upload($file, $module, $moduleId, $entity = null, $disk = 'default', ?int $folderId = null): array|string
     {
         try {
             // Validate input parameters
@@ -108,6 +108,7 @@ class Files
         if ($leantimeFile) {
             $leantimeFile['module'] = $module;
             $leantimeFile['moduleId'] = $moduleId;
+            $leantimeFile['folderId'] = $folderId;
 
             $fileAddResults = $this->fileRepository->addFile($leantimeFile, $module);
 
@@ -157,5 +158,168 @@ class Files
         }
 
         return false;
+    }
+
+    // ── Folder management ────────────────────────────────────────────
+
+    /**
+     * Get folders for a module + moduleId, optionally filtered by parent.
+     */
+    public function getFolders(string $module, int $moduleId, ?int $parentId = null): array
+    {
+        return $this->fileRepository->getFileFolders($module, $moduleId, $parentId);
+    }
+
+    /**
+     * Get files filtered by folder.
+     */
+    public function getFilesByFolder(string $module, int $moduleId, ?int $folderId): array
+    {
+        return $this->fileRepository->getFilesByFolder($module, $moduleId, $folderId);
+    }
+
+    /**
+     * Create a new folder — requires editor+.
+     */
+    public function createFolder(string $name, string $module, int $moduleId, ?int $parentId = null): array|false
+    {
+        if (! Auth::userIsAtLeast(Roles::$editor)) {
+            return false;
+        }
+
+        if (empty(trim($name))) {
+            return false;
+        }
+
+        $id = $this->fileRepository->addFileFolder($name, $module, $moduleId, $parentId);
+        if ($id) {
+            $folder = $this->fileRepository->getFileFolderById($id);
+
+            return $folder;
+        }
+
+        return false;
+    }
+
+    /**
+     * Rename a folder — requires editor+.
+     */
+    public function renameFolder(int $folderId, string $name): bool
+    {
+        if (! Auth::userIsAtLeast(Roles::$editor)) {
+            return false;
+        }
+
+        return $this->fileRepository->renameFileFolder($folderId, $name);
+    }
+
+    /**
+     * Delete a folder — requires editor+, folders with files are allowed (files go to root).
+     */
+    public function deleteFolder(int $folderId): bool
+    {
+        if (! Auth::userIsAtLeast(Roles::$editor)) {
+            return false;
+        }
+
+        return $this->fileRepository->deleteFileFolder($folderId);
+    }
+
+    /**
+     * Move a file to a folder — requires editor+.
+     */
+    public function moveFileToFolder(int $fileId, ?int $folderId): bool
+    {
+        if (! Auth::userIsAtLeast(Roles::$editor)) {
+            return false;
+        }
+
+        return $this->fileRepository->moveFileToFolder($fileId, $folderId);
+    }
+
+    /**
+     * Create an empty text file — requires editor+.
+     */
+    public function createFile(string $name, ?int $folderId, string $module, int $moduleId): array|false
+    {
+        if (! Auth::userIsAtLeast(Roles::$editor)) {
+            return false;
+        }
+
+        $ext = pathinfo($name, PATHINFO_EXTENSION) ?: 'txt';
+        $realName = pathinfo($name, PATHINFO_FILENAME);
+
+        $encName = md5(session('userdata.id').time());
+        $content = '';
+
+        // Store empty file via FileManager
+        $this->fileManager->write($encName.'.'.$ext, $content, 'default');
+
+        $values = [
+            'encName' => $encName,
+            'realName' => $realName,
+            'extension' => $ext,
+            'moduleId' => $moduleId,
+            'userId' => session('userdata.id'),
+            'module' => $module,
+            'folderId' => $folderId,
+        ];
+
+        $fileId = $this->fileRepository->addFile($values, $module);
+
+        if ($fileId) {
+            return $this->fileRepository->getFile((int) $fileId);
+        }
+
+        return false;
+    }
+
+    /**
+     * Rename a file — requires editor+.
+     */
+    public function renameFile(int $fileId, string $newName): bool
+    {
+        if (! Auth::userIsAtLeast(Roles::$editor)) {
+            return false;
+        }
+
+        $ext = pathinfo($newName, PATHINFO_EXTENSION) ?: 'txt';
+        $realName = pathinfo($newName, PATHINFO_FILENAME);
+
+        return $this->fileRepository->renameFile($fileId, $realName, $ext);
+    }
+
+    /**
+     * Read text file content — requires editor+ for the owning project.
+     */
+    public function readFileContent(int $fileId): string|false
+    {
+        $file = $this->fileRepository->getFile($fileId);
+        if (! $file) {
+            return false;
+        }
+
+        $fileName = $file['encName'].'.'.$file['extension'];
+
+        return $this->fileManager->read($fileName, 'default');
+    }
+
+    /**
+     * Write text file content — requires editor+.
+     */
+    public function writeFileContent(int $fileId, string $content): bool
+    {
+        if (! Auth::userIsAtLeast(Roles::$editor)) {
+            return false;
+        }
+
+        $file = $this->fileRepository->getFile($fileId);
+        if (! $file) {
+            return false;
+        }
+
+        $fileName = $file['encName'].'.'.$file['extension'];
+
+        return $this->fileManager->write($fileName, $content, 'default');
     }
 }

@@ -385,4 +385,46 @@ class FileManager implements FileManagerInterface
 
         return (int) $iValue;
     }
+
+    /**
+     * Read file content from storage.
+     */
+    public function read(string $fileName, string $disk = 'default'): string|false
+    {
+        try {
+            if ($disk === 'default') {
+                $disk = $this->filesystemManager->getDefaultDriver();
+            }
+            $storage = $this->filesystemManager->disk($disk);
+
+            if (! $storage->exists($fileName)) {
+                return false;
+            }
+
+            return $storage->get($fileName);
+        } catch (\Exception $e) {
+            Log::error('Error reading file: '.$e->getMessage(), ['fileName' => $fileName]);
+
+            return false;
+        }
+    }
+
+    /**
+     * Write file content to storage.
+     */
+    public function write(string $fileName, string $content, string $disk = 'default'): bool
+    {
+        try {
+            if ($disk === 'default') {
+                $disk = $this->filesystemManager->getDefaultDriver();
+            }
+            $storage = $this->filesystemManager->disk($disk);
+
+            return $storage->put($fileName, $content);
+        } catch (\Exception $e) {
+            Log::error('Error writing file: '.$e->getMessage(), ['fileName' => $fileName]);
+
+            return false;
+        }
+    }
 }
